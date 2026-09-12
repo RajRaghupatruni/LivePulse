@@ -54,6 +54,46 @@ Forensic verification on 2026-09-12 with Docker Compose PostgreSQL 16 and Redpan
 
 The GitHub Actions workflow YAML parsed and its commands match the local scripts, but it was not dispatched to GitHub during this run. M1 is verified against its acceptance criteria; future product requirements remain locked in `PRODUCT_REQUIREMENTS.md` with explicit not-implemented status.
 
+## M2 acceptance
+
+| # | Criterion | Status / evidence |
+|---:|---|---|
+| 1 | Existing M1 tests still pass | **Verified** — M1 backend pipeline/recovery coverage passes in the 20-test backend suite; existing frontend cases remain in the 20-test suite |
+| 2 | Main screen is focus-led, not a generic dashboard | **Verified** — inspected live app at desktop viewport; match focus, system rail, and durable timeline form the workspace |
+| 3 | Live local day/date/time | **Verified** — browser shows local weekday/date and a ticking local clock without API polling |
+| 4 | Demo still uses the M1 event path | **Verified** — live browser demo progressed over WebSocket; backend integration test covers the durable pipeline |
+| 5 | Match Mode follows lifecycle | **Verified** — domain FocusState is supplied through REST/WS; demo displayed halftime, live, and full-time modes |
+| 6 | Goal/red-card attention is transient | **Verified** — deterministic 12-second expiry and goal/red-card priorities covered by backend focus tests |
+| 7 | Focus returns to persistent lifecycle state | **Verified** — expiry derives persistent state from current match status; full-time demo settled at 30/100 |
+| 8 | Pulse Timeline remains first-class and durable | **Verified** — API-backed timeline shows all ten persisted scenario events, newest first |
+| 9 | New live events animate meaningfully | **Verified** — Framer Motion entrance is limited to newly received items; reduced-motion is honored |
+| 10 | Historical reload does not replay entrance animations | **Verified** — `AnimatePresence initial={false}` suppresses initial-history entrance; refreshed browser showed reconstructed history |
+| 11 | LIVE / RECONNECTING / RESYNCING are truthful | **Verified** — connection hook state machine and status component tests pass; socket reconnect refetches snapshots |
+| 12 | System-health API reports observed state | **Verified** — local PostgreSQL, Redpanda, publisher, projector, realtime, and demo source returned healthy in Compose; dependency degradation/unknown/stale heartbeat normalization is tested |
+| 13 | Health details are useful and restrained | **Verified** — browser detail panel showed per-component status, safe detail codes, timestamps, and realtime client count |
+| 14 | Command bar keyboard shortcut works | **Verified** — Ctrl+K browser check and component test focus the input; Cmd+K uses the same meta-key handler |
+| 15 | Local deterministic commands work | **Verified** — command registry and component tests cover run demo, reset, health, match, and close routes |
+| 16 | Unknown natural language does not fake AI | **Verified** — UI test checks the explicit “AI chat connects in the intelligence milestone.” response |
+| 17 | Refresh reconstructs authoritative state | **Verified** — after completion, browser reload restored 2–1 full-time, version 10, ten events, focus 30, and healthy system state |
+| 18 | WebSocket recovery remains correct | **Verified** — replay/gap tests pass; an inactive-match notification test verifies timeline retention plus authoritative active-state refresh, with stale state rejected |
+| 19 | Accessibility basics | **Verified by code review and component tests** — semantic buttons/status, labeled command input, visible focus tokens, Escape handling, contrast tokens, and reduced-motion rules |
+| 20 | Frontend production build | **Verified** — `npm run build` passed |
+| 21 | Backend tests | **Verified** — Ruff clean; PostgreSQL/Redpanda integration-enabled pytest: 20 passed |
+| 22 | Frontend tests | **Verified** — Vitest: 20 passed across 7 files |
+| 23 | Ruff/lint/typecheck | **Verified** — Ruff and `npm run lint` passed (lint command includes TypeScript typecheck) |
+| 24 | Documentation status ledger | **Verified** — product status, architecture, README, ADRs, and this table updated without removing future P0 requirements |
+
+M2 validation environment: Windows PowerShell, Python 3.13, Node 22.17, npm 10.9.2, Docker Compose PostgreSQL 16/Redpanda, and the existing in-app browser. `docker compose up --build -d --wait` reported all services healthy. `python -m alembic upgrade head` and `python -m alembic check` passed for the added timeline source migration. `docker compose config --quiet`, Ruff, frontend lint/typecheck, Vitest (20 passed), production build, and the integration-enabled backend suite (20 passed) passed. The browser ran the complete 54-second demo through the command bar and then reloaded to the persisted final state. A final `docker compose ps` recheck was denied by the local Docker API socket sandbox; the app remained `LIVE`, reported all systems nominal, and rendered all observed components ready after the demo. GitHub-hosted CI was not run remotely.
+
+## M2 risks and technical debt
+
+- System health is an in-process, single-instance view. Worker heartbeats expire after a bounded interval; it is not a distributed health registry, and health probes can add connection setup cost.
+- The realtime fan-out remains in-memory and the local Compose app is a single backend instance. Horizontal scaling requires shared fan-out/recovery infrastructure.
+- Transient attention uses the projected event update time and browser timer, then refetches authoritative state at expiry. A temporarily unavailable API can leave last-known attention visible while the connection reports degraded.
+- The command registry is local frontend routing only. Data queries, AI, streaming, citations, and authorization are not implemented.
+- Accessibility was checked with the semantic tree, component tests, and source inspection; no automated screen-reader or keyboard-only end-to-end suite was run.
+- GitHub Actions was inspected and its commands match local checks, but remote GitHub execution was not initiated.
+
 ## M1 risks and technical debt
 
 - The local service runs API, outbox publisher, and projector in one backend process. WebSocket fan-out is in-memory and assumes one backend instance; horizontal scaling needs a durable/shared fan-out design.

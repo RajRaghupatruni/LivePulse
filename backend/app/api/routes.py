@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime
 from typing import Any
 
 from aiokafka import AIOKafkaProducer
@@ -25,8 +26,9 @@ from uuid6 import uuid7
 
 from app.core.config import get_settings
 from app.core.errors import LivePulseError, livepulse_error_handler
+from app.core.health import component_snapshot, overall_status, report_component
 from app.core.logging import configure_logging
-from app.domain.focus import attention_for
+from app.domain.focus import focus_for_match
 from app.outbox.publisher import run_publisher
 from app.projections.projector import run_projector
 from app.realtime.manager import realtime
@@ -62,6 +64,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
+    report_component("demo_source", "healthy", "idle")
     tasks: list[asyncio.Task[None]] = []
     if get_settings().run_background_services:
         tasks = [
@@ -81,6 +84,22 @@ async def lifespan(_app: FastAPI):
         with suppress(asyncio.CancelledError):
             await task
     await engine.dispose()
+
+
+async def _run_demo_scenario(match_id: str, run_id: Any) -> None:
+    try:
+        await run_comeback(match_id, run_id)
+    except asyncio.CancelledError:
+        report_component("demo_source", "healthy", "scenario_cancelled")
+        raise
+    except Exception:
+        report_component("demo_source", "degraded", "scenario_failed")
+        log.exception(
+            "demo scenario failed",
+            extra={"subject_id": match_id, "error_code": "demo_scenario_failed"},
+        )
+    else:
+        report_component("demo_source", "healthy", "scenario_complete", succeeded=True)
 
 
 app = FastAPI(title="LivePulse API", version="0.1.0", lifespan=lifespan)
@@ -171,6 +190,51 @@ async def health_ready() -> dict[str, str]:
         ) from exc
 
 
+async def _probe_postgres() -> dict[str, Any]:
+    try:
+        async with SessionFactory() as session:
+            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=2)
+        report_component("postgres", "healthy", "query_ok", succeeded=True)
+    except Exception:
+        report_component("postgres", "unavailable", "connection_failed")
+    return component_snapshot("postgres")
+
+
+async def _probe_redpanda() -> dict[str, Any]:
+    producer = AIOKafkaProducer(
+        bootstrap_servers=get_settings().kafka_bootstrap_servers,
+        request_timeout_ms=2000,
+    )
+    try:
+        await asyncio.wait_for(producer.start(), timeout=3)
+        report_component("redpanda", "healthy", "broker_connected", succeeded=True)
+    except Exception:
+        report_component("redpanda", "unavailable", "broker_connection_failed")
+    finally:
+        with suppress(Exception):
+            await producer.stop()
+    return component_snapshot("redpanda")
+
+
+@router.get("/api/v1/system/health")
+async def system_health() -> dict[str, Any]:
+    postgres, redpanda = await asyncio.gather(_probe_postgres(), _probe_redpanda())
+    realtime_health = realtime.health_snapshot()
+    components = {
+        "postgres": postgres,
+        "redpanda": redpanda,
+        "outbox_publisher": component_snapshot("outbox_publisher"),
+        "projector": component_snapshot("projector"),
+        "realtime": realtime_health,
+        "demo_source": component_snapshot("demo_source"),
+    }
+    return {
+        "status": overall_status(components),
+        "checked_at": datetime.now(UTC).isoformat(),
+        "components": components,
+    }
+
+
 @router.get("/api/v1/live-state")
 async def live_state(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     control = await session.get(DemoControlRow, 1)
@@ -180,7 +244,20 @@ async def live_state(session: AsyncSession = Depends(get_session)) -> dict[str, 
         else None
     )
     if match is None:
-        return {"match": None, "attention": attention_for("idle", None), "updated_at": None}
+        focus = focus_for_match("idle", None)
+        return {
+            "match": None,
+            "attention": focus.score,
+            "focus": focus.model_dump(mode="json"),
+            "updated_at": None,
+        }
+    focus = focus_for_match(
+        match.status,
+        match.last_event_type,
+        match.updated_at,
+        source="football",
+        subject_id=match.match_id,
+    )
     return {
         "match": {
             "match_id": match.match_id,
@@ -197,7 +274,8 @@ async def live_state(session: AsyncSession = Depends(get_session)) -> dict[str, 
             "last_event_type": match.last_event_type,
             "updated_at": match.updated_at.isoformat(),
         },
-        "attention": attention_for(match.status, match.last_event_type, match.updated_at),
+        "attention": focus.score,
+        "focus": focus.model_dump(mode="json"),
         "updated_at": match.updated_at.isoformat(),
     }
 
@@ -222,6 +300,7 @@ async def timeline(
                 "cursor": row.cursor,
                 "event_id": str(row.event_id),
                 "event_type": row.event_type,
+                "source": row.source,
                 "subject_id": row.subject_id,
                 "timestamp": row.occurred_at.isoformat(),
                 "payload": row.payload,
@@ -243,7 +322,10 @@ async def start_demo() -> dict[str, str]:
         match_id = f"demo-{uuid7()}"
         run_id = await activate_match(match_id)
         active_scenario_id = match_id
-        scenario_task = asyncio.create_task(run_comeback(match_id, run_id), name="demo-comeback")
+        report_component("demo_source", "healthy", "scenario_running")
+        scenario_task = asyncio.create_task(
+            _run_demo_scenario(match_id, run_id), name="demo-comeback"
+        )
         return {"status": "started", "scenario": "comeback", "match_id": match_id}
 
 
@@ -258,6 +340,7 @@ async def reset_demo() -> dict[str, str]:
         scenario_task = None
         active_scenario_id = None
         await clear_demo_data()
+        report_component("demo_source", "healthy", "idle")
     await realtime.publish({"type": "resync_required", "reason": "demo_reset"})
     return {"status": "reset"}
 
@@ -293,6 +376,7 @@ async def websocket_endpoint(websocket: WebSocket, last_cursor: int | None = Non
                                 "cursor": row.cursor,
                                 "event_id": str(row.event_id),
                                 "event_type": row.event_type,
+                                "source": row.source,
                                 "timestamp": row.occurred_at.isoformat(),
                                 "payload": row.payload,
                                 "replayed": True,

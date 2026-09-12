@@ -1,10 +1,58 @@
-import { describe, expect, it } from 'vitest'
-import { mergeLiveState } from './useLivePulse'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getLiveState, getTimeline } from '../lib/api'
+import { mergeLiveState, mergeRealtimeState, useLivePulse } from './useLivePulse'
 import type { LiveState } from '../types/livepulse'
 
-const state = (version: number, matchId = 'demo-1'): LiveState => ({
+vi.mock('../lib/api', () => ({
+  getLiveState: vi.fn(),
+  getTimeline: vi.fn(),
+  resetDemo: vi.fn(),
+  startDemo: vi.fn(),
+}))
+
+class FakeWebSocket {
+  static OPEN = 1
+  static instance: FakeWebSocket
+  readonly url: string
+  readyState = 0
+  onopen: ((event: Event) => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onclose: ((event: CloseEvent) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instance = this
+  }
+
+  open() {
+    this.readyState = FakeWebSocket.OPEN
+    this.onopen?.(new Event('open'))
+  }
+
+  send(message: unknown) {
+    this.onmessage?.({ data: JSON.stringify(message) } as MessageEvent)
+  }
+
+  close() {
+    this.readyState = 3
+  }
+}
+
+const state = (version: number, matchId = 'demo-1', updatedAt = `2026-09-12T20:00:${String(version).padStart(2, '0')}Z`): LiveState => ({
   attention: 70,
-  updated_at: `2026-09-12T20:00:${String(version).padStart(2, '0')}Z`,
+  focus: {
+    score: 70,
+    severity: 'high',
+    reason: 'live_match',
+    transient: false,
+    expires_at: null,
+    source: 'football',
+    subject_id: matchId,
+    match_mode: 'live',
+  },
+  updated_at: updatedAt,
   match: {
     match_id: matchId,
     home_team: 'Northstar FC',
@@ -18,7 +66,7 @@ const state = (version: number, matchId = 'demo-1'): LiveState => ({
     version,
     last_event_id: `event-${version}`,
     last_event_type: 'football.match.goal',
-    updated_at: `2026-09-12T20:00:${String(version).padStart(2, '0')}Z`,
+    updated_at: updatedAt,
   },
 })
 
@@ -29,6 +77,60 @@ describe('authoritative live-state merge', () => {
   })
 
   it('accepts a new active match even when its per-match version restarts', () => {
-    expect(mergeLiveState(state(4), state(1, 'demo-2')).match?.match_id).toBe('demo-2')
+    expect(mergeLiveState(state(4), state(1, 'demo-2', '2026-09-12T20:00:05Z')).match?.match_id).toBe('demo-2')
+  })
+
+  it('does not let a WebSocket projection for another match replace active state', () => {
+    const current = state(1, 'active-match', '2026-09-12T20:00:05Z')
+    const inactiveProjection = state(9, 'inactive-match', '2026-09-12T20:00:10Z')
+    expect(mergeRealtimeState(current, inactiveProjection.match!)).toBe(current)
+  })
+
+  it('rejects a stale WebSocket state event for the same match', () => {
+    const current = state(4)
+    expect(mergeRealtimeState(current, state(3).match!, undefined, 100)).toBe(current)
+  })
+})
+
+describe('inactive-match realtime notifications', () => {
+  const originalWebSocket = globalThis.WebSocket
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+    vi.mocked(getLiveState).mockResolvedValue(state(1, 'active-match'))
+    vi.mocked(getTimeline).mockResolvedValue({ items: [], latest_cursor: 0 })
+  })
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket
+  })
+
+  it('keeps inactive state in history and refreshes the authoritative active match', async () => {
+    const { result, unmount } = renderHook(() => useLivePulse())
+    await waitFor(() => expect(FakeWebSocket.instance).toBeDefined())
+    act(() => FakeWebSocket.instance.open())
+    await waitFor(() => expect(getLiveState).toHaveBeenCalledTimes(2))
+
+    const inactive = state(9, 'inactive-match', '2026-09-12T20:00:10Z')
+    const notification = {
+      type: 'timeline.item',
+      cursor: 1,
+      event_id: 'inactive-event',
+      event_type: 'football.match.goal',
+      source: 'demo-football',
+      timestamp: inactive.updated_at,
+      state: inactive.match,
+      focus: inactive.focus,
+      payload: {},
+    }
+    act(() => FakeWebSocket.instance.send(notification))
+    await waitFor(() => expect(getLiveState).toHaveBeenCalledTimes(3))
+
+    expect(result.current.live.match?.match_id).toBe('active-match')
+    expect(result.current.timeline.map((item) => item.event_id)).toEqual(['inactive-event'])
+    act(() => FakeWebSocket.instance.send(notification))
+    expect(result.current.timeline).toHaveLength(1)
+    unmount()
   })
 })

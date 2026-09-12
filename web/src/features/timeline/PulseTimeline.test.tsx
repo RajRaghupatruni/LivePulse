@@ -5,7 +5,7 @@ import { PulseTimeline } from './PulseTimeline'
 describe('PulseTimeline', () => {
   it('renders event history and empty state', () => {
     const item = {
-      cursor: 1, event_id: 'evt-1', event_type: 'football.match.goal', subject_id: 'demo-1',
+      cursor: 1, event_id: 'evt-1', event_type: 'football.match.goal', source: 'demo-football', subject_id: 'demo-1',
       timestamp: '2026-09-12T20:00:00Z', payload: { side: 'home', home_team: 'Northstar FC', player: 'M. Vale', minute: 28 },
     }
     const { rerender } = render(<PulseTimeline items={[]} />)
@@ -13,6 +13,7 @@ describe('PulseTimeline', () => {
     rerender(<PulseTimeline items={[item]} />)
     expect(screen.getByText('Goal')).toBeInTheDocument()
     expect(screen.getByText('M. Vale · Northstar FC')).toBeInTheDocument()
+    expect(screen.getByText('Demo Football')).toBeInTheDocument()
     expect(screen.getByText('28′')).toBeInTheDocument()
   })
 })

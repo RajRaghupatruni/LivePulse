@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from uuid6 import uuid7
 
 from app.domain.events import CanonicalEvent
-from app.domain.focus import Attention, attention_for
+from app.domain.focus import Attention, attention_for, focus_for_match
 from app.projections.reducer import reduce_match_state
 
 
@@ -36,13 +36,29 @@ def test_projection_transitions_and_ignores_stale_versions() -> None:
 
 def test_focus_engine_uses_deterministic_event_priority() -> None:
     now = datetime.now(UTC)
-    assert attention_for("live", "football.match.goal", now, now) == int(Attention.CRITICAL)
-    assert attention_for("live", "football.match.red_card", now, now) == int(Attention.CRITICAL)
+    goal = focus_for_match("live", "football.match.goal", now, now, subject_id="match-1")
+    red_card = focus_for_match("live", "football.match.red_card", now, now)
+    assert (goal.score, goal.severity, goal.reason, goal.transient) == (
+        100,
+        "critical",
+        "goal",
+        True,
+    )
+    assert goal.expires_at == now + timedelta(seconds=12)
+    assert (red_card.score, red_card.reason, red_card.match_mode) == (95, "red_card", "highlight")
     assert attention_for(
         "live", "football.match.goal", now, now + timedelta(seconds=13)
     ) == int(Attention.HIGH)
+    settled = focus_for_match("live", "football.match.goal", now, now + timedelta(seconds=13))
+    assert (settled.score, settled.reason, settled.transient, settled.match_mode) == (
+        70,
+        "live_match",
+        False,
+        "live",
+    )
     assert attention_for("live", "football.match.yellow_card", now, now) == int(Attention.HIGH)
-    assert attention_for("live", "football.match.kickoff") == int(Attention.HIGH)
-    assert attention_for("halftime", "football.match.halftime") == int(Attention.HIGH)
-    assert attention_for("scheduled", None) == int(Attention.NORMAL)
-    assert attention_for("idle", None) == int(Attention.LOW)
+    assert focus_for_match("live", "football.match.kickoff").match_mode == "live"
+    assert focus_for_match("halftime", "football.match.halftime").score == 52
+    assert focus_for_match("scheduled", None).score == int(Attention.NORMAL)
+    assert focus_for_match("fulltime", "football.match.fulltime").match_mode == "fulltime"
+    assert focus_for_match("idle", None).score == int(Attention.LOW)

@@ -1,4 +1,4 @@
-import type { LiveState, TimelineResponse } from '../types/livepulse'
+import type { LiveState, SystemHealth, TimelineResponse } from '../types/livepulse'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -14,5 +14,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const getLiveState = () => request<LiveState>('/api/v1/live-state')
 export const getTimeline = () => request<TimelineResponse>('/api/v1/timeline?limit=80')
+export const getSystemHealth = () => request<SystemHealth>('/api/v1/system/health')
 export const startDemo = () => request<{ status: string; match_id: string }>('/api/v1/demo/scenarios/comeback/start', { method: 'POST' })
 export const resetDemo = () => request<{ status: string }>('/api/v1/demo/reset', { method: 'POST' })

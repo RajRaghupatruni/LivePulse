@@ -1,20 +1,21 @@
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 import { Radio } from 'lucide-react'
 import type { ConnectionState } from '../hooks/useLivePulse'
 
 const labels: Record<ConnectionState, string> = {
   CONNECTING: 'CONNECTING',
-  LIVE: 'SYSTEM LIVE',
-  RECONNECTING: 'RECONNECTING',
-  RESYNCING: 'RESYNCING',
+  LIVE: 'LIVE',
+  RECONNECTING: 'RECONNECTING…',
+  RESYNCING: 'RESYNCING…',
   DEGRADED: 'DEGRADED',
 }
 
 export function ConnectionBadge({ state }: { state: ConnectionState }) {
+  const reduceMotion = useReducedMotion()
   return (
-    <motion.div className={`connection-badge ${state.toLowerCase()}`} layout transition={{ duration: 0.25 }} aria-live="polite">
+    <motion.div className={`connection-badge ${state.toLowerCase()}`} layout={!reduceMotion} transition={{ duration: reduceMotion ? 0 : 0.25 }} role="status" aria-live="polite">
       <Radio size={14} strokeWidth={1.8} />
-      <span className="status-dot" />
+      <span className="status-dot" aria-hidden="true" />
       {labels[state]}
     </motion.div>
   )

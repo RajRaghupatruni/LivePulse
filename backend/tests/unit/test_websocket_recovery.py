@@ -46,6 +46,7 @@ async def test_reconnect_replays_durable_items_after_last_cursor(
         cursor=4,
         event_id=uuid4(),
         event_type="football.match.goal",
+        source="demo-football",
         occurred_at=datetime.now(UTC),
         payload={"side": "home"},
     )
@@ -60,6 +61,7 @@ async def test_reconnect_replays_durable_items_after_last_cursor(
             "cursor": 4,
             "event_id": str(row.event_id),
             "event_type": "football.match.goal",
+            "source": "demo-football",
             "timestamp": row.occurred_at.isoformat(),
             "payload": {"side": "home"},
             "replayed": True,

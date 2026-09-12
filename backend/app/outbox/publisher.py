@@ -9,6 +9,7 @@ from aiokafka.errors import TopicAlreadyExistsError
 from sqlalchemy import or_, select
 
 from app.core.config import get_settings
+from app.core.health import report_component
 from app.storage.database import SessionFactory
 from app.storage.models import OutboxMessageRow
 
@@ -56,6 +57,7 @@ async def publish_pending_once(producer: AIOKafkaProducer, batch_size: int = 50)
         claims = [(r.id, r.event_id, r.topic, r.partition_key, r.payload) for r in rows]
 
     published = 0
+    failures = 0
     for row_id, event_id, topic, key, payload in claims:
         try:
             await producer.send_and_wait(topic, json.dumps(payload).encode(), key=key.encode())
@@ -76,6 +78,7 @@ async def publish_pending_once(producer: AIOKafkaProducer, batch_size: int = 50)
             )
             published += 1
         except Exception as exc:
+            failures += 1
             async with SessionFactory() as session:
                 async with session.begin():
                     row = await session.get(OutboxMessageRow, row_id)
@@ -92,6 +95,21 @@ async def publish_pending_once(producer: AIOKafkaProducer, batch_size: int = 50)
                     "error_code": "outbox_publish_failed",
                 },
             )
+    if failures:
+        report_component(
+            "outbox_publisher",
+            "degraded",
+            "publish_failed",
+            metrics={"published": published, "failed": failures},
+        )
+    else:
+        report_component(
+            "outbox_publisher",
+            "healthy",
+            "poll_complete",
+            succeeded=True,
+            metrics={"published": published, "failed": 0},
+        )
     return published
 
 
@@ -109,6 +127,7 @@ async def run_publisher() -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
+            report_component("outbox_publisher", "degraded", "publisher_disconnected")
             log.exception(
                 "outbox publisher disconnected", extra={"error_code": "broker_unavailable"}
             )

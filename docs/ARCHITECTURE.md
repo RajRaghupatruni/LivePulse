@@ -48,6 +48,18 @@ The demo's sequence assignment and reset/start coordination are serialized throu
 
 REST endpoints return current projection and timeline history. WebSocket notifications include cursor, event identity/type, UTC timestamp, and payload. A client can provide `last_cursor`; the server compares against durable timeline state and sends recoverable entries or an explicit `resync_required`. Heartbeats detect dead connections. Request IDs are accepted/generated and returned in error responses and structured logs.
 
+The REST live-state/timeline response is the authoritative browser reconstruction. WebSocket frames are incremental notifications which may arrive after a REST snapshot, be duplicated, or be missed. The frontend merges only non-stale state versions, deduplicates timeline events by identity, and refetches REST state when the socket reports a gap or reconnects. It exposes `RECONNECTING` and `RESYNCING` while that recovery occurs; a visible last-known state is not treated as current until the snapshot is applied. Timeline cursor values are durable sequence watermarks, not event counts.
+
+## Focus, Match Mode, and command surface
+
+`app.domain.focus` owns deterministic attention semantics and returns a normalized `FocusState` with score, severity, reason, transient flag, expiry, source, subject, and Match Mode. A goal/red card raises attention for a bounded interval; on expiry the API derives attention again from the authoritative match lifecycle (live, halftime, scheduled, fulltime, or idle). The frontend displays this result and does not reimplement priority rules. Match Mode is a presentation of the same domain focus state, not a separate mutable UI guess. This keeps attention testable and reproducible and leaves AI outside authoritative state.
+
+The persistent command bar has a small explicit frontend command registry for safe local actions (`run demo`, `reset demo`, `show system health`, `show match`, and `close`). These commands call the existing API or reveal existing product surfaces. Unmatched natural language is acknowledged as unavailable until the intelligence milestone; no backend command service or AI behavior is claimed. The message shape leaves room for later streamed assistant content/citations without adding unused execution capabilities now.
+
+## System health
+
+`GET /api/v1/system/health` reports normalized `healthy`, `degraded`, `unavailable`, or `unknown` states for components the local service can observe: a PostgreSQL query probe; a Redpanda broker metadata connection; successful outbox-poll and projector-poll heartbeats with freshness bounds; realtime client/overflow state; and demo-source activity. Probe details use safe codes, not connection strings or payloads. Overall status aggregates component states; process liveness and readiness endpoints retain their separate meanings. These observations cover this single local deployment only, not future external providers or multi-instance operations.
+
 ## Operations and security boundaries
 
 JSON logs carry service, request/correlation ID, event ID/type, consumer identity, and categorized errors where known. Health live means process responsiveness; health ready checks PostgreSQL and broker availability. M1 exposes a deterministic local demo; it is not hardened for public internet exposure. A security/threat model is required before external integrations or production. No secrets are committed. No Redis or Kubernetes is used.

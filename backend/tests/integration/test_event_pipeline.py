@@ -177,10 +177,10 @@ async def test_comeback_scenario_reaches_authoritative_final_state(
         assert len(observed) == 10
         assert focus_by_event["football.match.scheduled"] == 40
         assert focus_by_event["football.match.kickoff"] == 70
-        assert focus_by_event["football.match.goal"] == 95
+        assert focus_by_event["football.match.goal"] == 100
         assert focus_by_event["football.match.red_card"] == 95
-        assert focus_by_event["football.match.halftime"] == 70
-        assert focus_by_event["football.match.fulltime"] == 20
+        assert focus_by_event["football.match.halftime"] == 52
+        assert focus_by_event["football.match.fulltime"] == 30
         async with SessionFactory() as session:
             state = await session.get(MatchStateRow, match_id)
             timeline_count = await session.scalar(

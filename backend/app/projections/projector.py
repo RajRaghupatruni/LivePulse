@@ -5,8 +5,9 @@ import logging
 from aiokafka import AIOKafkaConsumer
 
 from app.core.config import get_settings
+from app.core.health import report_component
 from app.domain.events import CanonicalEvent
-from app.domain.focus import attention_for
+from app.domain.focus import focus_for_match
 from app.projections.reducer import reduce_match_state
 from app.realtime.manager import realtime
 from app.storage.database import SessionFactory
@@ -73,22 +74,30 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
             timeline = PulseTimelineRow(
                 event_id=event.event_id,
                 event_type=event.event_type,
+                source=event.source,
                 subject_id=event.subject_id,
                 occurred_at=event.occurred_at,
                 payload=event.payload,
             )
             session.add(timeline)
             await session.flush()
+            focus = focus_for_match(
+                str(next_state["status"]),
+                event.event_type,
+                next_state["updated_at"],  # type: ignore[arg-type]
+                source="football",
+                subject_id=event.subject_id,
+            )
             notification = {
                 "type": "timeline.item",
                 "cursor": timeline.cursor,
                 "event_id": str(event.event_id),
                 "event_type": event.event_type,
+                "source": event.source,
                 "timestamp": event.occurred_at.isoformat(),
                 "payload": event.payload,
-                "attention": attention_for(
-                    str(next_state["status"]), event.event_type, next_state["updated_at"]
-                ),
+                "attention": focus.score,
+                "focus": focus.model_dump(mode="json"),
             }
             notification["state"] = _public_state(next_state)
     if notification:
@@ -158,12 +167,21 @@ async def run_projector() -> None:
         )
         try:
             await consumer.start()
-            async for message in consumer:
-                await _process_message(message)
-                await consumer.commit()
+            report_component("projector", "healthy", "consumer_connected", succeeded=True)
+            while True:
+                batches = await consumer.getmany(timeout_ms=1000, max_records=50)
+                for messages in batches.values():
+                    for message in messages:
+                        await _process_message(message)
+                if any(batches.values()):
+                    # getmany advances local positions for the entire batch; commit
+                    # only after every record in it has durably projected.
+                    await consumer.commit()
+                report_component("projector", "healthy", "poll_complete", succeeded=True)
         except asyncio.CancelledError:
             raise
         except Exception:
+            report_component("projector", "degraded", "consumer_disconnected")
             log.exception(
                 "projector disconnected",
                 extra={"consumer": CONSUMER_NAME, "error_code": "consumer_failed"},

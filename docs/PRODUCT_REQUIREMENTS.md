@@ -17,20 +17,20 @@ LivePulse is a single-user personal realtime command center intended to stay ope
 | Read-only Gmail | **Not implemented** |
 | Weather | **Not implemented** |
 | Persistent live local date/time/day | **Implemented in M1 UI** |
-| Deterministic Focus Engine | **Implemented in M1 foundation**; initial football priorities only |
-| Adaptive command-center UI | **Not implemented**; M1 establishes shell and state-derived attention |
-| Match Mode | **Not implemented** |
-| Provider and system health visibility | **Partially implemented in M1 foundation**; API dependency readiness and browser connection state are visible, but there is no detailed per-provider health surface yet |
+| Deterministic Focus Engine | **Implemented in M2**; normalized backend-owned focus contract with deterministic football attention, transient event expiry, and persistent lifecycle state; other source priorities remain future work |
+| Adaptive command-center UI | **Implemented in M2 foundation**; focus-led desktop shell driven by backend state; future provider surfaces remain absent until implemented |
+| Match Mode | **Implemented in M2**; match lifecycle derives Match Mode from backend focus state |
+| Provider and system health visibility | **Implemented in M2 for observable local components** (PostgreSQL, Redpanda, outbox publisher, projector, realtime fan-out, and demo source); real provider health is future work |
 | Full ChatGPT-style chat using GPT-5.6 Luna | **Not implemented** |
 | Streaming AI responses | **Not implemented** |
 | OpenAI web search for freshness-dependent questions | **Not implemented** |
 | LivePulse-aware AI tools | **Not implemented** |
-| Command bar for data queries, commands, and general AI questions | **Not implemented**; M1 has UI placeholder only |
+| Command bar for data queries, commands, and general AI questions | **Implemented in M2 foundation**; explicit local command registry for demo/reset/health/match/close. Data queries and general AI questions remain future work |
 | WebSocket reconnect/resynchronization | **Implemented in M1 foundation**; reconnect/refetch and cursor-gap signal |
 | Security/threat model | **Not implemented**; required before external integrations/production |
 | Structured logging | **Implemented in M1 foundation** |
 | Metrics and tracing | **Not implemented**; instrumentation boundaries established |
-| Failure tests | **Partially implemented in M1**; transaction rollback, transient publish retry, duplicate/concurrent delivery, stale versions, and WebSocket recovery are tested; process-kill and prolonged broker restart injection remain future work |
+| Failure tests | **Partially implemented through M2**; transaction rollback, transient publish retry, duplicate/concurrent delivery, stale versions, WebSocket recovery, consumer batch commit ordering, health normalization, and focus expiry are tested; process-kill and prolonged broker restart injection remain future work |
 | Load tests | **Not implemented** |
 | CI | **Implemented in M1 foundation** |
 | Terraform production architecture | **Not implemented** |
@@ -41,6 +41,8 @@ LivePulse is a single-user personal realtime command center intended to stay ope
 M1 proves the architecture end-to-end with one deterministic simulated football provider and one comeback scenario. It includes a provider-independent immutable event envelope; PostgreSQL event, transactional outbox, match-state, timeline, and idempotency storage; Redpanda publication and consumption with at-least-once delivery; a recoverable WebSocket foundation; APIs; a dark command-center shell; deterministic attention; tests; local infrastructure; scripts; and CI.
 
 M1 does not implement Spotify, Gmail, GitHub, weather, OpenAI, a real football API, Redis, Kubernetes, production deployment, or the future requirements marked not implemented above.
+
+M2 keeps the M1 event path unchanged and adds a backend-owned structured Focus Engine, Match Mode, a desktop focus-led shell, observable local system-health state, richer timeline presentation metadata, recovery-state UX, and an explicit local command-router foundation. The system-health API reports observations and worker heartbeats, not hypothetical provider availability. The command bar does not call AI and clearly identifies unknown natural-language requests as future intelligence functionality.
 
 ## Product behavior requirements
 
