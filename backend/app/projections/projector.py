@@ -13,7 +13,6 @@ from app.storage.database import SessionFactory
 from app.storage.models import (
     CanonicalEventRow,
     ConsumerProcessedEventRow,
-    DemoControlRow,
     MatchStateRow,
     PulseTimelineRow,
 )
@@ -36,9 +35,6 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
             session.add(
                 ConsumerProcessedEventRow(consumer_name=CONSUMER_NAME, event_id=event.event_id)
             )
-            control = await session.get(DemoControlRow, 1)
-            if control is None or control.active_match_id != event.subject_id:
-                return False
             current_row = await session.get(MatchStateRow, event.subject_id)
             current = None
             if current_row:
@@ -60,6 +56,7 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
                     extra={
                         "event_id": str(event.event_id),
                         "event_type": event.event_type,
+                        "subject_id": event.subject_id,
                         "consumer": CONSUMER_NAME,
                     },
                 )
@@ -89,7 +86,9 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
                 "event_type": event.event_type,
                 "timestamp": event.occurred_at.isoformat(),
                 "payload": event.payload,
-                "attention": attention_for(str(next_state["status"]), event.event_type),
+                "attention": attention_for(
+                    str(next_state["status"]), event.event_type, next_state["updated_at"]
+                ),
             }
             notification["state"] = _public_state(next_state)
     if notification:
@@ -99,6 +98,7 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
             extra={
                 "event_id": str(event.event_id),
                 "event_type": event.event_type,
+                "subject_id": event.subject_id,
                 "consumer": CONSUMER_NAME,
             },
         )

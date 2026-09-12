@@ -30,7 +30,7 @@ LivePulse is a single-user personal realtime command center intended to stay ope
 | Security/threat model | **Not implemented**; required before external integrations/production |
 | Structured logging | **Implemented in M1 foundation** |
 | Metrics and tracing | **Not implemented**; instrumentation boundaries established |
-| Failure tests | **Partially implemented in M1**; transaction rollback, duplicate delivery, and idempotent projection are tested; prolonged broker failure/restart injection remains future work |
+| Failure tests | **Partially implemented in M1**; transaction rollback, transient publish retry, duplicate/concurrent delivery, stale versions, and WebSocket recovery are tested; process-kill and prolonged broker restart injection remain future work |
 | Load tests | **Not implemented** |
 | CI | **Implemented in M1 foundation** |
 | Terraform production architecture | **Not implemented** |

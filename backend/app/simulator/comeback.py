@@ -3,7 +3,7 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from uuid6 import uuid7
 
 from app.core.config import get_settings
@@ -73,6 +73,7 @@ async def run_comeback(match_id: str, run_id: UUID) -> None:
             extra={
                 "event_id": str(event.event_id),
                 "event_type": event.event_type,
+                "subject_id": event.subject_id,
                 "correlation_id": str(run_id),
             },
         )
@@ -81,25 +82,24 @@ async def run_comeback(match_id: str, run_id: UUID) -> None:
 
 
 async def clear_demo_data() -> None:
-    # Delete dependent rows before events so reset remains portable across databases.
+    # Keep reset scoped to simulator data; future providers must retain their history.
     from app.storage.models import (
         CanonicalEventRow,
-        ConsumerProcessedEventRow,
         MatchStateRow,
-        OutboxMessageRow,
-        PulseTimelineRow,
     )
 
     async with SessionFactory() as session:
         async with session.begin():
-            for model in (
-                ConsumerProcessedEventRow,
-                PulseTimelineRow,
-                OutboxMessageRow,
-                CanonicalEventRow,
-                MatchStateRow,
-            ):
-                await session.execute(delete(model))
+            demo_matches = select(CanonicalEventRow.subject_id).where(
+                CanonicalEventRow.source == "demo-football"
+            )
+            await session.execute(
+                delete(MatchStateRow).where(MatchStateRow.match_id.in_(demo_matches))
+            )
+            # Outbox, timeline, and processed-event rows cascade from canonical_events.
+            await session.execute(
+                delete(CanonicalEventRow).where(CanonicalEventRow.source == "demo-football")
+            )
             control = await session.get(DemoControlRow, 1)
             if control is None:
                 session.add(DemoControlRow(id=1, active_match_id=None))

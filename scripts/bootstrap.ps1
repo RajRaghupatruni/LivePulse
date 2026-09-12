@@ -5,7 +5,7 @@ if (-not (Test-Path (Join-Path $repoRoot '.env'))) {
   Copy-Item (Join-Path $repoRoot '.env.example') (Join-Path $repoRoot '.env')
 }
 
-docker compose -f (Join-Path $repoRoot 'docker-compose.yml') up -d postgres redpanda
+docker compose -f (Join-Path $repoRoot 'docker-compose.yml') up -d --wait postgres redpanda
 if ($LASTEXITCODE -ne 0) { throw 'Docker Compose failed to start PostgreSQL and Redpanda.' }
 
 $backend = Join-Path $repoRoot 'backend'

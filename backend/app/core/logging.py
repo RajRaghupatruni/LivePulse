@@ -3,13 +3,15 @@ import logging
 import sys
 from datetime import UTC, datetime
 
+from app.core.config import get_settings
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         item: dict[str, object] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname.lower(),
-            "service": "livepulse-api",
+            "service": get_settings().service_name,
             "logger": record.name,
             "message": record.getMessage(),
         }
@@ -18,8 +20,12 @@ class JsonFormatter(logging.Formatter):
             "correlation_id",
             "event_id",
             "event_type",
+            "subject_id",
             "consumer",
             "error_code",
+            "http_method",
+            "http_path",
+            "http_status",
         ):
             value = getattr(record, key, None)
             if value is not None:

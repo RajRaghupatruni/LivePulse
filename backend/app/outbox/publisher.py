@@ -18,15 +18,18 @@ log = logging.getLogger(__name__)
 async def ensure_topic() -> None:
     settings = get_settings()
     admin = AIOKafkaAdminClient(bootstrap_servers=settings.kafka_bootstrap_servers)
-    await admin.start()
     try:
+        await admin.start()
         await admin.create_topics(
             [NewTopic(name=settings.kafka_topic, num_partitions=3, replication_factor=1)]
         )
     except TopicAlreadyExistsError:
         pass
     finally:
-        await admin.close()
+        try:
+            await admin.close()
+        except Exception:
+            pass
 
 
 async def publish_pending_once(producer: AIOKafkaProducer, batch_size: int = 50) -> int:
@@ -63,7 +66,14 @@ async def publish_pending_once(producer: AIOKafkaProducer, batch_size: int = 50)
                         row.published_at = datetime.now(UTC)
                         row.claimed_at = None
                         row.last_error = None
-            log.info("outbox message published", extra={"event_id": str(event_id)})
+            log.info(
+                "outbox message published",
+                extra={
+                    "event_id": str(event_id),
+                    "event_type": payload.get("event_type"),
+                    "subject_id": payload.get("subject_id"),
+                },
+            )
             published += 1
         except Exception as exc:
             async with SessionFactory() as session:
@@ -75,7 +85,12 @@ async def publish_pending_once(producer: AIOKafkaProducer, batch_size: int = 50)
                         row.last_error = str(exc)[:1000]
             log.exception(
                 "outbox publication failed",
-                extra={"event_id": str(event_id), "error_code": "outbox_publish_failed"},
+                extra={
+                    "event_id": str(event_id),
+                    "event_type": payload.get("event_type"),
+                    "subject_id": payload.get("subject_id"),
+                    "error_code": "outbox_publish_failed",
+                },
             )
     return published
 

@@ -4,12 +4,21 @@ from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from aiokafka import AIOKafkaProducer
-from fastapi import APIRouter, Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from uuid6 import uuid7
@@ -38,6 +47,15 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["x-request-id"] = request_id
+        log.info(
+            "request completed",
+            extra={
+                "request_id": request_id,
+                "http_method": request.method,
+                "http_path": request.url.path,
+                "http_status": response.status_code,
+            },
+        )
         return response
 
 
@@ -51,6 +69,12 @@ async def lifespan(_app: FastAPI):
             asyncio.create_task(run_projector(), name="event-projector"),
         ]
     yield
+    global scenario_task
+    if scenario_task is not None and not scenario_task.done():
+        scenario_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scenario_task
+    scenario_task = None
     for task in tasks:
         task.cancel()
     for task in tasks:
@@ -68,6 +92,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_exception_handler(LivePulseError, livepulse_error_handler)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    code = {404: "not_found", 405: "method_not_allowed"}.get(exc.status_code, "http_error")
+    message = exc.detail if isinstance(exc.detail, str) else "The request could not be completed"
+    return JSONResponse(
+        status_code=exc.status_code,
+        headers=exc.headers,
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+                "request_id": getattr(request.state, "request_id", "unknown"),
+            }
+        },
+    )
 
 
 @app.exception_handler(RequestValidationError)
@@ -118,8 +159,11 @@ async def health_ready() -> dict[str, str]:
         producer = AIOKafkaProducer(
             bootstrap_servers=get_settings().kafka_bootstrap_servers, request_timeout_ms=1500
         )
-        await producer.start()
-        await producer.stop()
+        try:
+            await producer.start()
+        finally:
+            with suppress(Exception):
+                await producer.stop()
         return {"status": "ready"}
     except Exception as exc:
         raise LivePulseError(
@@ -153,7 +197,7 @@ async def live_state(session: AsyncSession = Depends(get_session)) -> dict[str, 
             "last_event_type": match.last_event_type,
             "updated_at": match.updated_at.isoformat(),
         },
-        "attention": attention_for(match.status, match.last_event_type),
+        "attention": attention_for(match.status, match.last_event_type, match.updated_at),
         "updated_at": match.updated_at.isoformat(),
     }
 
@@ -167,8 +211,11 @@ async def timeline(
     query = select(PulseTimelineRow).order_by(PulseTimelineRow.cursor.desc()).limit(limit)
     if before is not None:
         query = query.where(PulseTimelineRow.cursor < before)
-    rows = list(await session.scalars(query))
     maximum = await session.scalar(select(func.max(PulseTimelineRow.cursor)))
+    # Read the resume watermark first. A concurrent append can then be included
+    # in the following page query without being skipped by a higher watermark.
+    rows = list(await session.scalars(query))
+    latest_cursor = max([maximum or 0, *(row.cursor for row in rows)])
     return {
         "items": [
             {
@@ -181,7 +228,7 @@ async def timeline(
             }
             for row in rows
         ],
-        "latest_cursor": maximum or 0,
+        "latest_cursor": latest_cursor,
     }
 
 
@@ -211,6 +258,7 @@ async def reset_demo() -> dict[str, str]:
         scenario_task = None
         active_scenario_id = None
         await clear_demo_data()
+    await realtime.publish({"type": "resync_required", "reason": "demo_reset"})
     return {"status": "reset"}
 
 

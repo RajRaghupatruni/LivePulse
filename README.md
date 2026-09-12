@@ -19,7 +19,7 @@ From the repository root in PowerShell:
 ./scripts/bootstrap.ps1
 ```
 
-This creates `.env` from `.env.example`, starts PostgreSQL 16 and Redpanda, creates `backend/.venv`, and installs backend/frontend dependencies.
+This creates `.env` from `.env.example`, waits for healthy PostgreSQL 16 and Redpanda, creates `backend/.venv`, and installs backend/frontend dependencies.
 
 In one PowerShell window start the backend and its outbox publisher/projector workers:
 
@@ -36,7 +36,7 @@ npm run dev
 
 Open <http://localhost:5173>. The API is at <http://localhost:8000>; OpenAPI docs are at <http://localhost:8000/docs>. The backend runs `alembic upgrade head` before serving requests. PostgreSQL and Redpanda can also be started directly with `docker compose up -d postgres redpanda`.
 
-The all-container path is:
+The development script also waits for PostgreSQL and Redpanda health before running migrations. The all-container path is:
 
 ```powershell
 docker compose up --build
@@ -46,7 +46,7 @@ It exposes the web client on port 5173, API on 8000, PostgreSQL on 5432, and Red
 
 ## Demo
 
-Select **Run Demo Match**. Ten deterministic observations arrive over about 54 seconds. Each is normalized by the same ingestion adapter used by future providers. The event and outbox row commit atomically; the publisher sends to `livepulse.events.football.v1`; the projector updates current match state and the ordered Pulse Timeline once; the WebSocket pushes notifications. The final score is Northstar FC 2–1 Harbor United. **Reset** cancels an active local scenario and clears demo history. Each run receives a new match identity so late records from an earlier run cannot affect the current projection.
+Select **Run Demo Match**. Ten deterministic observations arrive over about 54 seconds. Each is normalized by the same ingestion adapter used by future providers. The event and outbox row commit atomically; the publisher sends to `livepulse.events.football.v1`; the projector updates match state and the ordered Pulse Timeline once; the WebSocket pushes notifications. The final score is Northstar FC 2–1 Harbor United. **Reset** cancels an active local scenario, deletes simulator-owned history/projections, and sends connected clients a resync signal. The global timeline cursor sequence is not reset. Each run receives a new match identity, so a delayed event updates only its own match projection and timeline history, never a newer match's projection.
 
 Useful endpoints:
 
@@ -67,13 +67,16 @@ Useful endpoints:
 That runs Ruff and backend unit tests, then frontend lint/typecheck, Vitest, and production build. The PostgreSQL + Redpanda vertical integration test is opt-in locally:
 
 ```powershell
-docker compose up -d postgres redpanda
+docker compose up -d --wait postgres redpanda
+# Stop the local projector first if the full Compose backend is running.
+docker compose stop backend
 Set-Location backend
 $env:DATABASE_URL = 'postgresql+asyncpg://livepulse:livepulse@localhost:5432/livepulse'
 $env:KAFKA_BOOTSTRAP_SERVERS = 'localhost:19092'
 $env:LIVEPULSE_INTEGRATION = '1'
-..venvScriptsalembic.exe upgrade head
-..venvScriptspytest.exe
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m pytest
+docker compose up -d --wait backend
 ```
 
 CI runs that vertical test against PostgreSQL and Redpanda services, alongside lint, frontend tests, and build.

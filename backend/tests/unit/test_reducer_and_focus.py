@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from uuid6 import uuid7
 
@@ -35,8 +35,13 @@ def test_projection_transitions_and_ignores_stale_versions() -> None:
 
 
 def test_focus_engine_uses_deterministic_event_priority() -> None:
-    assert attention_for("live", "football.match.goal") == int(Attention.CRITICAL)
-    assert attention_for("live", "football.match.red_card") == int(Attention.CRITICAL)
+    now = datetime.now(UTC)
+    assert attention_for("live", "football.match.goal", now, now) == int(Attention.CRITICAL)
+    assert attention_for("live", "football.match.red_card", now, now) == int(Attention.CRITICAL)
+    assert attention_for(
+        "live", "football.match.goal", now, now + timedelta(seconds=13)
+    ) == int(Attention.HIGH)
+    assert attention_for("live", "football.match.yellow_card", now, now) == int(Attention.HIGH)
     assert attention_for("live", "football.match.kickoff") == int(Attention.HIGH)
     assert attention_for("halftime", "football.match.halftime") == int(Attention.HIGH)
     assert attention_for("scheduled", None) == int(Attention.NORMAL)
