@@ -56,3 +56,5 @@ async def test_system_health_reports_unavailable_postgres_without_hiding_worker_
     assert result["components"]["outbox_publisher"]["status"] == "unknown"
     assert result["components"]["projector"]["status"] == "healthy"
     assert "connected_clients" in result["components"]["realtime"]["metrics"]
+    assert set(result["providers"]) == {"football", "spotify", "github", "gmail", "weather"}
+    assert result["providers"]["spotify"]["provider"] == "spotify"

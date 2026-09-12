@@ -16,6 +16,7 @@ const statusLabel: Record<HealthStatus, string> = {
   healthy: 'HEALTHY',
   degraded: 'DEGRADED',
   unavailable: 'UNAVAILABLE',
+  disconnected: 'DISCONNECTED',
   unknown: 'UNKNOWN',
 }
 

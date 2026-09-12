@@ -31,6 +31,7 @@ from app.core.logging import configure_logging
 from app.domain.focus import focus_for_match
 from app.outbox.publisher import run_publisher
 from app.projections.projector import run_projector
+from app.providers.status import provider_health
 from app.realtime.manager import realtime
 from app.simulator.comeback import activate_match, clear_demo_data, run_comeback
 from app.storage.database import SessionFactory, engine, get_session
@@ -232,6 +233,7 @@ async def system_health() -> dict[str, Any]:
         "status": overall_status(components),
         "checked_at": datetime.now(UTC).isoformat(),
         "components": components,
+        "providers": provider_health.snapshot(),
     }
 
 

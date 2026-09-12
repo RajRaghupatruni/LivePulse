@@ -99,6 +99,41 @@ M2 validation environment: Windows PowerShell, Python 3.13, Node 22.17, npm 10.9
 - The local service runs API, outbox publisher, and projector in one backend process. WebSocket fan-out is in-memory and assumes one backend instance; horizontal scaling needs a durable/shared fan-out design.
 - If the backend is restarted mid-scenario, its in-memory simulator task is cancelled and the remaining timed observations do not resume automatically. Events already committed, outbox publication, projections, and browser reconnect/resync remain durable; reset and start runs the deterministic scenario again. M1 verifies state/reconnect recovery across backend restart, not simulator-task checkpointing.
 - There is no public deployment security/threat model, authentication, production metrics/tracing, or load test in M1.
+
+## M3 Integration Foundation acceptance
+
+This foundation is separate from provider delivery. It is complete only when every row is verified; it does not mean any external provider is implemented.
+
+| Criterion | Status / evidence |
+|---|---|
+| M1/M2 backend/frontend behavior remains intact | **Verified for default suite** — backend 23 passed; seven opt-in PostgreSQL/Redpanda tests were skipped in this M3 run; M1/M2 full integration evidence remains recorded above |
+| Typed provider capability and normalized observation contracts exist without a forced all-capabilities base class | **Verified** — focused provider foundation tests cover typed UTC observations and explicit registry behavior |
+| Poll scheduler has bounded concurrency, cadence hook, timeout, jitter, backoff, Retry-After, and clean cancellation | **Verified** — focused tests cover concurrency limit, observation handoff, timeout, cancellation, bounded jitter, exponential backoff, and Retry-After floor |
+| Missing provider credentials/config do not block startup and status remains truthful | **Verified** — optional settings instantiate empty; missing providers report disconnected and configured-but-unimplemented providers report unknown |
+| Provider health is safe, normalized, extensible, and separate from infrastructure overall status | **Verified** — API returns a `providers` map; unit tests cover status transitions, timestamps, safe codes, and no credential value exposure |
+| Credential persistence requires application-encrypted Fernet ciphertext | **Verified** — SQLite persistence test reads ciphertext from the database, decrypts via the explicit cipher, and confirms plaintext assignment is rejected |
+| Shared provider connection/checkpoint migration upgrades empty and current M2 schemas | **Verified** — current database upgraded from `0002_timeline_source`; an empty scratch database upgraded from base; both passed `alembic check` |
+| Spotify command contract is bounded and does not execute provider calls | **Verified** — required/forbidden argument and result validation tests pass; no Spotify target is registered |
+| Provider DTO boundary and reserved event taxonomy are documented | **Verified** — provider package boundaries, observation/event distinction, capability ADR, and complete reserved event families are recorded |
+| `.env.example` is complete and contains no personal location or real credentials | **Verified by inspection** — all locked optional settings are present, credentials/coordinates are blank, and `.env` remains ignored |
+| No real provider/OpenAI clients, endpoints, or UI were added | **Verified by code inspection** — provider packages are contract boundaries only; no outbound provider client or provider surface was added |
+| Ruff, backend tests, frontend lint/typecheck/tests/build, and migration checks pass | **Verified** — Ruff clean; backend 23 passed/7 skipped; frontend lint passed, Vitest 20 passed, build passed; fresh/current migrations and `alembic check` passed |
+
+M3 validation was run locally with Python 3.13, PostgreSQL, Node, and npm. `docker compose config --quiet` passed. GitHub-hosted CI was not run remotely. Seven existing integration tests are gated behind `LIVEPULSE_INTEGRATION=1` and were not rerun in this foundation pass; they still require the local PostgreSQL/Redpanda vertical test path documented above.
+
+## M3 scope and explicit non-implementation
+
+Implemented foundation items are provider package boundaries, protocols for polling/webhooks/commands/health, typed normalized observations, a single-instance poll scheduler with observation handoff, provider configuration placeholders, normalized provider-health records, encrypted-credential persistence and shared checkpoints, and frontend integration types. Future provider and event contracts remain recorded in `PRODUCT_REQUIREMENTS.md`.
+
+Not implemented: API-Football, Spotify OAuth/playback, GitHub webhook/API/reconciliation, Gmail OAuth/API, Open-Meteo, provider-specific DTOs/normalizers, provider UI, OpenAI/M4, distributed scheduling, credential key rotation, provider connection APIs, and production threat-model/security controls. Provider streams should branch only after this shared change is reviewed and committed.
+
+## M3 risks and technical debt
+
+- Provider health, capability registration, scheduler state, and backoff are in-process/single-instance. No sources are registered in M3, and no external connectivity has been exercised.
+- Scheduler cadence and observation-to-event normalization remain provider responsibilities. A provider adapter must hand meaningful changes to the existing canonical event/outbox path; scheduler outputs are not projections.
+- Fernet protects credentials at rest only when the operator supplies and protects the key. Key rotation/re-encryption, backup/restore procedures, secret-manager integration, and a production threat model remain future work.
+- Shared checkpoints store opaque values, but provider-specific transactionality between checkpoint advancement and canonical event/outbox persistence must be designed and tested by each synchronization stream.
+- This M3 run skipped seven `LIVEPULSE_INTEGRATION=1` tests. The unchanged M1/M2 path has previously passed the recorded full PostgreSQL/Redpanda suite; rerun that suite after the shared foundation is committed and before provider branches merge.
 - Outbox tests inject a broker send error and prove retry; process-kill between broker acknowledgement and the database `published_at` update is not fault-injected. The documented at-least-once duplicate path and idempotent consumer remain the recovery mechanism.
 - The initial locked Vitest 3.2.7 dependency produced two moderate entries for the same [GHSA-82fw-gwwq-j7x9 / CVE-2026-84373](https://github.com/vitest-dev/vitest/security/advisories/GHSA-82fw-gwwq-j7x9): direct `vitest` and transitive `@vitest/mocker`. A reachable unauthenticated mocker WebSocket could register a redirect mock and make the dev process read local files; the advisory is in test tooling and requires the mocker plugin path, which this app's ordinary Vite UI server does not register. The patched line is Vitest 4.1.11. Node 22 and Vite 7 meet its documented prerequisites; Vitest 4 has major-version migration changes, but this project's tests use stable APIs and lint/tests/build pass. `@testing-library/dom` is explicit to satisfy Testing Library's peer. Clean `npm ci` and `npm audit --json` now report zero vulnerabilities; no advisory is deferred.
 - The GitHub Actions workflow has not been run by GitHub yet; only its local constituent commands and service path were exercised.

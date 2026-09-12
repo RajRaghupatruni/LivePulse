@@ -2,7 +2,7 @@
 
 LivePulse is a single-user realtime command center built around a durable event platform. M1 proves the end-to-end path using one deterministic simulated football match: observation → normalization → PostgreSQL event and transactional outbox → Redpanda → idempotent projection → Pulse Timeline → recoverable WebSocket → browser. M2 adds a focus-led desktop shell, backend-owned deterministic Match Mode/attention, observed component health, explicit local commands, and visible reconnect/resync states without changing that event path.
 
-The locked P0 direction and implementation status live in [PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md). Review [ARCHITECTURE.md](docs/ARCHITECTURE.md), its accepted ADRs, and [DEFINITION_OF_DONE.md](docs/DEFINITION_OF_DONE.md) before changing core behavior.
+The locked P0 direction and implementation status live in [PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md). Review [ARCHITECTURE.md](docs/ARCHITECTURE.md), its accepted ADRs, and [DEFINITION_OF_DONE.md](docs/DEFINITION_OF_DONE.md) before changing core behavior. M3 adds shared provider integration contracts only; no real provider client is enabled yet.
 
 ## Requirements
 
@@ -60,6 +60,12 @@ Useful endpoints:
 - `ws://localhost:8000/ws?last_cursor=0`
 
 The command bar stays available at the bottom of the page. Press **Ctrl+K** or **Cmd+K** to focus it. Supported local commands are `run demo`, `reset demo`, `show system health`, `show match`, and `close`; unknown questions are not sent to AI and receive the message that AI chat connects in the intelligence milestone. The header clock uses the browser's local timezone. The health detail panel shows only observed local component/probe and worker-heartbeat state.
+
+## M3 integration foundation
+
+The backend now has separate provider package boundaries, typed poll/webhook/command capabilities, a typed normalized `Observation` contract, an explicit capability registry, a bounded single-instance poll scheduler, and secret-free provider status in the `providers` section of system health. The shared database migration adds provider connection and checkpoint records. Credential persistence accepts only an encrypted wrapper; configure `CREDENTIAL_ENCRYPTION_KEY` with a locally generated Fernet key before a future provider stores OAuth credentials. Missing provider configuration is optional and does not block app startup.
+
+`.env.example` lists optional provider settings, and `.env` is ignored by Git. Personal weather coordinates belong only in the local `.env`. These settings and package boundaries establish interfaces, not working integrations: API-Football, Spotify, GitHub, Gmail, Open-Meteo, and OpenAI are not called. M4 AI remains out of scope. Run `python -m pytest tests/unit/test_provider_foundation.py` from `backend` to exercise the shared contracts without network services.
 
 ## Tests and checks
 

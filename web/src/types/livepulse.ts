@@ -44,7 +44,7 @@ export type TimelineItem = {
 
 export type TimelineResponse = { items: TimelineItem[]; latest_cursor: number }
 
-export type HealthStatus = 'healthy' | 'degraded' | 'unavailable' | 'unknown'
+export type HealthStatus = 'healthy' | 'degraded' | 'unavailable' | 'unknown' | 'disconnected'
 
 export type HealthComponent = {
   name: string
@@ -55,10 +55,24 @@ export type HealthComponent = {
   metrics?: Record<string, number | string | null>
 }
 
+export type ProviderHealth = {
+  provider: string
+  status: HealthStatus
+  configured: boolean
+  checked_at: string | null
+  last_success_at: string | null
+  last_failure_at: string | null
+  last_observation_at: string | null
+  consecutive_failures: number
+  rate_limited_until: string | null
+  detail_code: string
+}
+
 export type SystemHealth = {
   status: HealthStatus
   checked_at: string
   components: Record<string, HealthComponent>
+  providers?: Record<string, ProviderHealth>
 }
 
 export type RealtimeMessage = {

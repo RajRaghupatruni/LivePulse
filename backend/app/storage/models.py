@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -15,7 +16,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import JSON
+from sqlalchemy.types import JSON, TypeDecorator
+
+from app.providers.credentials import EncryptedCredentials
 
 
 class Base(DeclarativeBase):
@@ -23,6 +26,24 @@ class Base(DeclarativeBase):
 
 
 json_type = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
+scopes_type = JSON().with_variant(JSONB, "postgresql")
+
+
+class EncryptedCredentialsType(TypeDecorator[EncryptedCredentials]):
+    """Refuse plaintext strings at the ORM-to-database boundary."""
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: EncryptedCredentials | None, dialect: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, EncryptedCredentials):
+            raise TypeError("provider credentials must be encrypted before persistence")
+        return value.token
+
+    def process_result_value(self, value: str | None, dialect: Any) -> EncryptedCredentials | None:
+        return EncryptedCredentials(value) if value is not None else None
 
 
 class CanonicalEventRow(Base):
@@ -123,3 +144,55 @@ class DemoControlRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     active_match_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class ProviderConnectionRow(Base):
+    __tablename__ = "provider_connections"
+    __table_args__ = (
+        UniqueConstraint("provider", name="uq_provider_connections_provider"),
+        CheckConstraint(
+            "status IN ('disconnected', 'pending', 'connected', 'degraded')",
+            name="ck_provider_connections_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="disconnected")
+    encrypted_credentials: Mapped[EncryptedCredentials | None] = mapped_column(
+        EncryptedCredentialsType(), nullable=True
+    )
+    scopes: Mapped[list[str]] = mapped_column(scopes_type, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"ProviderConnectionRow(provider={self.provider!r}, status={self.status!r})"
+
+
+class ProviderCheckpointRow(Base):
+    __tablename__ = "provider_checkpoints"
+    __table_args__ = (
+        UniqueConstraint("provider", "checkpoint_key", name="uq_provider_checkpoint_key"),
+        Index("ix_provider_checkpoints_updated_at", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    checkpoint_key: Mapped[str] = mapped_column(String(150), nullable=False)
+    checkpoint_value: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
