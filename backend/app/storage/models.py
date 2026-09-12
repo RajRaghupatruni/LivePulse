@@ -1,0 +1,124 @@
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import JSON
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+json_type = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
+
+
+class CanonicalEventRow(Base):
+    __tablename__ = "canonical_events"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_canonical_events_dedupe_key"),
+        Index("ix_canonical_events_subject_version", "subject_id", "version"),
+        Index("ix_canonical_events_occurred_at", "occurred_at"),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(100))
+    event_type: Mapped[str] = mapped_column(String(100))
+    subject_type: Mapped[str] = mapped_column(String(50))
+    subject_id: Mapped[str] = mapped_column(String(100))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    dedupe_key: Mapped[str] = mapped_column(String(255))
+    schema_version: Mapped[int] = mapped_column(Integer)
+    correlation_id: Mapped[UUID]
+    payload: Mapped[dict[str, Any]] = mapped_column(json_type)
+
+
+class OutboxMessageRow(Base):
+    __tablename__ = "outbox_messages"
+    __table_args__ = (Index("ix_outbox_pending", "published_at", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[UUID] = mapped_column(
+        ForeignKey("canonical_events.event_id", ondelete="CASCADE"), unique=True
+    )
+    topic: Mapped[str] = mapped_column(String(200))
+    partition_key: Mapped[str] = mapped_column(String(200))
+    payload: Mapped[dict[str, Any]] = mapped_column(json_type)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MatchStateRow(Base):
+    __tablename__ = "match_state"
+
+    match_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    home_team: Mapped[str] = mapped_column(String(100))
+    away_team: Mapped[str] = mapped_column(String(100))
+    competition: Mapped[str] = mapped_column(String(100))
+    home_score: Mapped[int] = mapped_column(Integer, default=0)
+    away_score: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(30), default="scheduled")
+    minute: Mapped[int] = mapped_column(Integer, default=0)
+    phase: Mapped[str] = mapped_column(String(30), default="pre_match")
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    last_event_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    last_event_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class PulseTimelineRow(Base):
+    __tablename__ = "pulse_timeline"
+    __table_args__ = (Index("ix_pulse_timeline_cursor", "cursor"),)
+
+    cursor: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[UUID] = mapped_column(
+        ForeignKey("canonical_events.event_id", ondelete="CASCADE"), unique=True
+    )
+    event_type: Mapped[str] = mapped_column(String(100))
+    subject_id: Mapped[str] = mapped_column(String(100))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(json_type)
+
+
+class ConsumerProcessedEventRow(Base):
+    __tablename__ = "consumer_processed_events"
+    __table_args__ = (Index("ix_processed_events_processed_at", "processed_at"),)
+
+    consumer_name: Mapped[str] = mapped_column(String(150), primary_key=True)
+    event_id: Mapped[UUID] = mapped_column(
+        ForeignKey("canonical_events.event_id", ondelete="CASCADE"), primary_key=True
+    )
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class DemoControlRow(Base):
+    __tablename__ = "demo_control"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    active_match_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

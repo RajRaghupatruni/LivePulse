@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+backend/pytest-cache-files-*/
+.coverage
+htmlcov/
+node_modules/
+dist/
+.vite/
+.idea/
+.vscode/
+Thumbs.db
