@@ -36,23 +36,25 @@ from app.projections.projector import run_projector
 from app.providers.base import PollContext
 from app.providers.football.models import FootballFixtureObservation
 from app.providers.football.routes import router as football_router
+from app.providers.football.service import football_fixture_service
 from app.providers.football.source import FootballPollSource
+from app.providers.github.events import GithubChange
+from app.providers.github.health import github_health
+from app.providers.github.reconcile import GithubReconciliationSource
+from app.providers.github.router import processor as github_webhook_processor
+from app.providers.github.router import router as github_router
+from app.providers.github.storage import persist_observations
 from app.providers.gmail.models import GmailSyncBatch
 from app.providers.gmail.oauth import encryption_key_configured, install_oauth_access_log_filter
 from app.providers.gmail.router import router as gmail_oauth_router
 from app.providers.gmail.sync import GmailSyncSource, ingest_gmail_observations
-from app.providers.github.events import GithubChange
-from app.providers.github.health import github_health
-from app.providers.github.reconcile import GithubReconciliationSource
-from app.providers.github.router import router as github_router
-from app.providers.github.storage import persist_observations
 from app.providers.observations import Observation
 from app.providers.registry import ProviderRegistry
 from app.providers.scheduler import PollScheduler
 from app.providers.spotify.auth import is_spotify_configured
 from app.providers.spotify.playback import SpotifyPlaybackChange
-from app.providers.spotify.provider import spotify_provider
 from app.providers.spotify.router import router as spotify_router
+from app.providers.spotify.router import spotify_provider
 from app.providers.status import provider_health
 from app.providers.weather.router import router as weather_router
 from app.providers.weather.service import weather_state
@@ -61,7 +63,12 @@ from app.providers.weather.storage import persist_weather_observation
 from app.realtime.manager import realtime
 from app.simulator.comeback import activate_match, clear_demo_data, run_comeback
 from app.storage.database import SessionFactory, engine, get_session
-from app.storage.models import DemoControlRow, MatchStateRow, PulseTimelineRow
+from app.storage.models import (
+    DemoControlRow,
+    MatchStateRow,
+    ProviderConnectionRow,
+    PulseTimelineRow,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -96,18 +103,26 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     github_health.initialize(settings)
     provider_registry = ProviderRegistry()
+    provider_registry.register_webhook_source(github_webhook_processor)
     provider_registry.register_command_target(spotify_provider.command_target)
     football_source: FootballPollSource | None = None
     if settings.provider_configuration()["football"]:
         football_source = FootballPollSource.from_configuration(settings.api_football_key)
         if football_source is not None:
             provider_registry.register_poll_source(football_source)
+            provider_health.report(
+                "football", "connecting", "awaiting_first_observation", configured=True
+            )
     if github_health.reconciliation_configured(settings):
         provider_registry.register_poll_source(GithubReconciliationSource(settings))
     if is_spotify_configured(settings):
         provider_registry.register_poll_source(spotify_provider.poll_source)
+        provider_health.report(
+            "spotify", "connecting", "awaiting_first_observation", configured=True
+        )
     if settings.provider_configuration()["gmail"] and encryption_key_configured(settings):
         provider_registry.register_poll_source(GmailSyncSource(settings=settings))
+        provider_health.report("gmail", "connecting", "awaiting_first_sync", configured=True)
     elif settings.provider_configuration()["gmail"]:
         provider_health.report(
             "gmail", "degraded", "credential_encryption_unavailable", configured=True
@@ -115,6 +130,9 @@ async def lifespan(_app: FastAPI):
     weather_source = build_weather_source(settings)
     if weather_source is not None:
         provider_registry.register_poll_source(weather_source)
+        provider_health.report(
+            "weather", "connecting", "awaiting_first_observation", configured=True
+        )
 
     async def persist_provider_observations(
         provider: str,
@@ -367,14 +385,129 @@ async def system_health() -> dict[str, Any]:
         "status": overall_status(components),
         "checked_at": datetime.now(UTC).isoformat(),
         "components": components,
-        "providers": _provider_health_snapshot(),
+        "providers": await _provider_health_snapshot(),
     }
 
 
-def _provider_health_snapshot() -> dict[str, dict[str, object]]:
-    snapshots = provider_health.snapshot()
+async def _provider_health_snapshot() -> dict[str, dict[str, object]]:
+    settings = get_settings()
+    snapshots = provider_health.snapshot(settings)
+    checked_at = datetime.now(UTC).isoformat()
     if football_fixture_service.quota is not None:
         snapshots["football"]["quota"] = football_fixture_service.quota
+    if football_fixture_service.cadence is not None:
+        snapshots["football"]["cadence"] = football_fixture_service.cadence
+
+    github = github_health.snapshot(settings)
+    snapshots["github"] = {
+        **snapshots["github"],
+        **github,
+        "checked_at": checked_at,
+        "last_observation_at": github.get("webhook", {}).get("last_received_at")
+        or github.get("reconciliation", {}).get("last_attempt_at"),
+        "last_success_at": github.get("reconciliation", {}).get("last_success_at"),
+        "rate_limited_until": github.get("reconciliation", {}).get("rate_limited_until"),
+    }
+
+    weather = weather_state.health_snapshot(settings)
+    generic_weather = snapshots["weather"]
+    weather_status = str(generic_weather.get("status", "unknown"))
+    if weather_status not in {
+        "rate_limited",
+        "auth_failure",
+        "provider_failure",
+        "unavailable",
+        "connecting",
+        "resyncing",
+    }:
+        if weather.get("freshness") == "stale":
+            weather_status = "stale"
+        else:
+            weather_status = str(weather.get("status", "unknown"))
+    snapshots["weather"] = {
+        **generic_weather,
+        **weather,
+        "status": weather_status,
+        "checked_at": checked_at,
+        "last_observation_at": weather.get("last_success_at"),
+        "rate_limited_until": generic_weather.get("rate_limited_until"),
+    }
+
+    if is_spotify_configured(settings):
+        try:
+            spotify_status = await spotify_provider.connection_status()
+            spotify = spotify_status.health.model_dump(mode="json")
+            if spotify.get("detail_code") == "not_observed" and spotify.get("connected"):
+                spotify["status"] = "connecting"
+        except Exception:
+            spotify = {
+                "provider": "spotify",
+                "configured": True,
+                "connected": False,
+                "status": "unavailable",
+                "detail_code": "connection_store_unavailable",
+            }
+    elif settings.provider_configuration()["spotify"]:
+        spotify = {
+            "provider": "spotify",
+            "configured": True,
+            "connected": False,
+            "status": "degraded",
+            "detail_code": (
+                "credential_encryption_unavailable"
+                if not encryption_key_configured(settings)
+                else "redirect_uri_invalid"
+            ),
+        }
+    else:
+        spotify = {
+            "provider": "spotify",
+            "configured": False,
+            "connected": False,
+            "status": "disconnected",
+            "detail_code": "configuration_missing",
+        }
+    if spotify["status"] in {"authorization_expired", "reconnect_required"}:
+        spotify["status"] = "auth_failure"
+    snapshots["spotify"] = {
+        **snapshots["spotify"],
+        **spotify,
+        "checked_at": checked_at,
+    }
+
+    gmail_configured = settings.provider_configuration()["gmail"]
+    gmail_connection = None
+    gmail_storage_unavailable = False
+    if gmail_configured:
+        try:
+            async with SessionFactory() as session:
+                gmail_connection = await session.scalar(
+                    select(ProviderConnectionRow).where(ProviderConnectionRow.provider == "gmail")
+                )
+        except Exception:
+            gmail_storage_unavailable = True
+    gmail_connected = bool(
+        gmail_connection
+        and gmail_connection.status == "connected"
+        and gmail_connection.encrypted_credentials is not None
+    )
+    gmail_status = snapshots["gmail"]
+    gmail_status["configured"] = gmail_configured
+    gmail_status["connected"] = gmail_connected
+    gmail_status["checked_at"] = checked_at
+    if not gmail_configured:
+        gmail_status.update(status="disconnected", detail_code="configuration_missing")
+    elif gmail_storage_unavailable:
+        gmail_status.update(status="unavailable", detail_code="connection_store_unavailable")
+    elif not encryption_key_configured(settings):
+        gmail_status.update(status="degraded", detail_code="credential_encryption_unavailable")
+    elif gmail_connection is None or not gmail_connected:
+        if gmail_connection is not None and gmail_connection.status == "degraded":
+            gmail_status.update(status="auth_failure", detail_code="reconnect_required")
+        elif gmail_status.get("status") in {"rate_limited", "provider_failure", "unavailable"}:
+            pass
+        else:
+            gmail_status.update(status="disconnected", detail_code="authorization_required")
     return snapshots
 
 

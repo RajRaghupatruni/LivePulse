@@ -10,24 +10,24 @@ LivePulse is a single-user personal realtime command center intended to stay ope
 
 | Requirement | Status |
 |---|---|
-| Unified Pulse Timeline across product domains | **Implemented in M1 foundation** (football events only); cross-domain unification remains future work |
-| Football: EPL, La Liga, Bundesliga, Ligue 1, EFL Championship, Champions League, Europa League, FA Cup, Carabao Cup, Serie A, MLS | **Not implemented**; M1 deterministic simulated match only; M3 shared contracts prepared, no API-Football calls |
-| Spotify current playback and controls | **Not implemented**; M3 command/config/credential contracts prepared, no OAuth or Spotify API calls |
-| Exactly five monitored GitHub repositories initially: Strata, Tandem, OptiScale, LivePulse, Portfolio | **Not implemented**; M3 config and webhook/reconciliation capability contracts prepared, no GitHub API/webhook endpoint |
-| Read-only Gmail | **Not implemented**; M3 checkpoint/config/credential foundation prepared, no OAuth or Gmail API calls |
-| Weather | **Not implemented**; M3 location config and polling contract prepared, no Open-Meteo calls |
+| Unified Pulse Timeline across product domains | **Implemented in M3 backend** for football, Spotify, GitHub, Gmail, and weather through one durable timeline-only path for non-football events; current UI remains a generic timeline |
+| Football: EPL, La Liga, Bundesliga, Ligue 1, EFL Championship, Champions League, Europa League, FA Cup, Carabao Cup, Serie A, MLS | **Implemented in M3** with API-Football polling, canonical/outbox events, authoritative football projection, quota-aware cadence, and seven-day upcoming horizon |
+| Spotify current playback and controls | **Implemented in M3 backend** with OAuth, encrypted credentials, playback polling, playback/device endpoints, and typed commands; requires local credentials and an authorized Premium account |
+| Exactly five monitored GitHub repositories initially: Strata, Tandem, OptiScale, LivePulse, Portfolio | **Implemented in M3 backend** with HMAC-validated webhooks, delivery dedupe, and bounded REST reconciliation; requires an owner, webhook secret and/or token |
+| Read-only Gmail | **Implemented in M3 backend** with `gmail.readonly`, encrypted credentials, bounded metadata sync, and transactional history checkpoints; requires Google OAuth setup |
+| Weather | **Implemented in M3 backend** with Open-Meteo current/daily conditions and meaningful-change events; requires local coordinates/timezone and no API key |
 | Persistent live local date/time/day | **Implemented in M1 UI** |
 | Deterministic Focus Engine | **Implemented in M2**; normalized backend-owned focus contract with deterministic football attention, transient event expiry, and persistent lifecycle state; other source priorities remain future work |
 | Adaptive command-center UI | **Implemented in M2 foundation**; focus-led desktop shell driven by backend state; future provider surfaces remain absent until implemented |
 | Match Mode | **Implemented in M2**; match lifecycle derives Match Mode from backend focus state |
-| Provider and system health visibility | **Implemented in M2 for observable local components** (PostgreSQL, Redpanda, outbox publisher, projector, realtime fan-out, and demo source); M3 adds a secret-free provider health contract, but no external provider connectivity is claimed |
+| Provider and system health visibility | **Implemented in M3** for local components and registered providers, with disconnected/unconfigured, connecting, healthy, stale, rate-limited/degraded, auth-failure, provider-failure, and resyncing states where evidence supports them |
 | Full ChatGPT-style chat using GPT-5.6 Luna | **Not implemented** |
 | Streaming AI responses | **Not implemented** |
 | OpenAI web search for freshness-dependent questions | **Not implemented** |
 | LivePulse-aware AI tools | **Not implemented** |
 | Command bar for data queries, commands, and general AI questions | **Implemented in M2 foundation**; explicit local command registry for demo/reset/health/match/close. Data queries and general AI questions remain future work |
 | WebSocket reconnect/resynchronization | **Implemented in M1 foundation**; reconnect/refetch and cursor-gap signal |
-| Security/threat model | **Not implemented**; required before external integrations/production |
+| Security/threat model | **M3 local threat model documented**; provider-specific controls implemented, but authentication, public-demo isolation, retention controls, key rotation and production hardening remain P0 incomplete |
 | Structured logging | **Implemented in M1 foundation** |
 | Metrics and tracing | **Not implemented**; instrumentation boundaries established |
 | Failure tests | **Partially implemented through M2**; transaction rollback, transient publish retry, duplicate/concurrent delivery, stale versions, WebSocket recovery, consumer batch commit ordering, health normalization, and focus expiry are tested; process-kill and prolonged broker restart injection remain future work |
@@ -36,9 +36,9 @@ LivePulse is a single-user personal realtime command center intended to stay ope
 | Terraform production architecture | **Not implemented** |
 | Deterministic public demo mode | **Not implemented**; local deterministic demo only |
 
-## Locked M3 provider contracts
+## Locked M3 provider contracts and status
 
-These implementation requirements are part of the product direction and remain locked. M3 foundation creates shared extension points only; each provider remains **not implemented** until its own adapter, error handling, tests, and user-facing behavior are delivered.
+These implementation requirements remain locked. Backend integration paths are implemented and tested in M3. Optional credentials remain local configuration; a missing provider configuration must leave the app bootable and report disconnected/unconfigured health.
 
 - **Football:** cover EPL, La Liga, Bundesliga, Ligue 1, EFL Championship, UEFA Champions League, UEFA Europa League, FA Cup, Carabao Cup, Serie A, and MLS. Target API-Football free tier. Poll adaptively and compare state; use canonical corrections as new events.
 - **Spotify:** real OAuth; current playback, track/context/device state, and play/pause/next/previous/seek/volume/device-transfer controls; Premium account required; credentials and refresh tokens remain server-managed and encrypted.
@@ -46,6 +46,8 @@ These implementation requirements are part of the product direction and remain l
 - **Gmail:** read-only P0. Never send, reply, draft, label, delete, or mutate. Synchronize incrementally with durable checkpoints and expose useful message/thread metadata. Do not add Google Pub/Sub for P0 unless a documented need changes that decision.
 - **Weather:** Open-Meteo, no paid/keyed source, current conditions plus concise daily context. Coordinates/timezone come only from ignored local environment/configuration; never commit a personal location.
 - **AI:** M4 only. GPT-5.6 Luna chat, streaming, web search, and LivePulse-aware tools remain not implemented in M3.
+
+All provider observations normalize to immutable canonical events and share the transactional event/outbox, Redpanda, idempotent projector, durable Pulse Timeline, and replay path. Football events alone mutate football match state. Provider-specific DTOs stay inside adapters and do not enter canonical or frontend contracts. M3 adds no provider-specific UI.
 
 The normalized provider-observation contract is an adapter boundary before canonical domain events. Polling, webhook verification/normalization, and commands are separate capabilities; no provider is required to implement all of them.
 
@@ -67,7 +69,7 @@ M1 does not implement Spotify, Gmail, GitHub, weather, OpenAI, a real football A
 
 M2 keeps the M1 event path unchanged and adds a backend-owned structured Focus Engine, Match Mode, a desktop focus-led shell, observable local system-health state, richer timeline presentation metadata, recovery-state UX, and an explicit local command-router foundation. The system-health API reports observations and worker heartbeats, not hypothetical provider availability. The command bar does not call AI and clearly identifies unknown natural-language requests as future intelligence functionality.
 
-M3 Integration Foundation adds shared typed provider capability contracts, a normalized observation boundary, provider health/config contracts, single-instance polling/backoff primitives, typed provider-command contracts, encrypted credential storage, and shared provider checkpoint/connection schema. It does not make any provider API request, implement OAuth/webhooks, add provider UI, or implement M4 AI. The five provider streams are intended to branch only after this shared foundation is reviewed and committed.
+M3 Provider Integration delivers real backend adapters for API-Football, GitHub, Spotify, Gmail, and Open-Meteo on the shared provider foundation. Runtime wiring includes one poll scheduler, GitHub webhook ingestion, Spotify OAuth/playback/commands, Gmail OAuth and incremental read-only sync, current-weather API and meaningful-change events, provider health, and domain-aware projector behavior for the universal timeline. M3 does not add the major adaptive UI redesign or M4 AI.
 
 ## Product behavior requirements
 

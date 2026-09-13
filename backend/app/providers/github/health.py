@@ -3,10 +3,22 @@
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from app.core.config import LOCKED_GITHUB_REPOSITORIES, Settings
+from app.core.config import Settings
 from app.providers.status import provider_health
 
-HealthStatus = Literal["healthy", "degraded", "disconnected", "unknown"]
+HealthStatus = Literal[
+    "healthy",
+    "degraded",
+    "stale",
+    "connecting",
+    "resyncing",
+    "rate_limited",
+    "auth_failure",
+    "provider_failure",
+    "unavailable",
+    "disconnected",
+    "unknown",
+]
 
 
 class GithubHealthTracker:
@@ -23,10 +35,6 @@ class GithubHealthTracker:
         return bool(
             settings.github_owner
             and settings.github_owner.strip()
-            and any(
-                name.casefold() in LOCKED_GITHUB_REPOSITORIES
-                for name in settings.github_repositories
-            )
             and settings.github_webhook_secret
             and settings.github_webhook_secret.get_secret_value().strip()
         )
@@ -36,10 +44,6 @@ class GithubHealthTracker:
         return bool(
             settings.github_owner
             and settings.github_owner.strip()
-            and any(
-                name.casefold() in LOCKED_GITHUB_REPOSITORIES
-                for name in settings.github_repositories
-            )
             and settings.github_token
             and settings.github_token.get_secret_value().strip()
         )
@@ -51,9 +55,12 @@ class GithubHealthTracker:
         if not rest:
             self.reconciliation_status = "disconnected"
             self.reconciliation_detail = "token_missing"
+        else:
+            self.reconciliation_status = "connecting"
+            self.reconciliation_detail = "awaiting_reconciliation"
         provider_health.report(
             "github",
-            "unknown" if rest else ("degraded" if webhook else "disconnected"),
+            "connecting" if rest else ("degraded" if webhook else "disconnected"),
             "awaiting_reconciliation"
             if rest
             else ("reconciliation_disconnected" if webhook else "configuration_missing"),
@@ -76,7 +83,8 @@ class GithubHealthTracker:
     def note_reconciliation_attempt(self, *, now: datetime | None = None) -> None:
         current = (now or datetime.now(UTC)).astimezone(UTC)
         self.last_reconciliation_at = current
-        if self.reconciliation_status == "unknown":
+        if self.reconciliation_status in {"unknown", "connecting"}:
+            self.reconciliation_status = "connecting"
             self.reconciliation_detail = "reconciliation_in_progress"
 
     def note_reconciliation_success(self, *, now: datetime | None = None) -> None:
@@ -96,7 +104,12 @@ class GithubHealthTracker:
     ) -> None:
         current = (now or datetime.now(UTC)).astimezone(UTC)
         self.last_reconciliation_at = current
-        self.reconciliation_status = "degraded"
+        if rate_limited_until is not None or "rate_limit" in detail_code:
+            self.reconciliation_status = "rate_limited"
+        elif detail_code in {"github_unauthorized", "github_forbidden"}:
+            self.reconciliation_status = "auth_failure"
+        else:
+            self.reconciliation_status = "provider_failure"
         self.reconciliation_detail = detail_code
         self.reconciliation_rate_limited_until = rate_limited_until
 
@@ -109,11 +122,15 @@ class GithubHealthTracker:
         if rest_configured and self.last_reconciliation_at and (
             current - self.last_reconciliation_at > timedelta(minutes=20)
         ):
-            rest_status = "degraded"
+            rest_status = "stale"
             rest_detail = "reconciliation_stale"
         if webhook_configured:
-            webhook_status: HealthStatus = "healthy"
-            webhook_detail = "webhook_listening"
+            webhook_status: HealthStatus = (
+                "healthy" if self.last_webhook_received_at else "connecting"
+            )
+            webhook_detail = "webhook_delivery_verified" if self.last_webhook_received_at else (
+                "awaiting_delivery"
+            )
         else:
             webhook_status = "disconnected"
             webhook_detail = "configuration_missing"
@@ -144,10 +161,19 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def _combined_status(webhook: HealthStatus, rest: HealthStatus) -> HealthStatus:
-    if "healthy" in {webhook, rest} and "degraded" not in {webhook, rest}:
-        return "healthy" if rest != "disconnected" else "degraded"
+    for status in ("auth_failure", "rate_limited", "provider_failure", "unavailable"):
+        if rest == status:
+            return status  # type: ignore[return-value]
+    if rest == "stale":
+        return "stale"
+    if rest == "healthy":
+        return "healthy"
+    if webhook != "disconnected" and rest == "disconnected":
+        return "degraded"
     if "degraded" in {webhook, rest}:
         return "degraded"
+    if "connecting" in {webhook, rest} or "resyncing" in {webhook, rest}:
+        return "connecting"
     if webhook == rest == "disconnected":
         return "disconnected"
     return "unknown"

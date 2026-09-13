@@ -2,9 +2,80 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from app.api import routes
+from app.core.config import Settings
 from app.core.health import _components, component_snapshot, overall_status, report_component
+from app.providers.status import ProviderHealthRegistry
+
+
+def test_application_boots_with_no_provider_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(_env_file=None, run_background_services=False)
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+
+    class FakeEngine:
+        async def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(routes, "engine", FakeEngine())
+    with TestClient(routes.app) as client:
+        assert client.get("/health/live").json() == {"status": "live"}
+        registry = routes.app.state.provider_registry
+        assert registry.poll_sources == ()
+        assert registry.command_target("spotify") is not None
+        assert client.get("/api/v1/football/fixtures").status_code == 200
+        assert client.post("/api/v1/webhooks/github", content=b"{}").status_code == 401
+        assert client.get("/api/v1/providers/spotify/oauth/start").status_code == 503
+        assert client.get("/api/v1/providers/gmail/oauth/start").status_code == 503
+        assert client.get("/api/v1/providers/weather/current").status_code == 200
+
+
+def test_configured_providers_are_registered_without_startup_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        run_background_services=False,
+        api_football_key=SecretStr("football-key"),
+        spotify_client_id="spotify-client",
+        spotify_client_secret=SecretStr("spotify-secret"),
+        spotify_redirect_uri=(
+            "http://127.0.0.1:8000/api/v1/providers/spotify/oauth/callback"
+        ),
+        github_owner="acme",
+        github_token=SecretStr("github-token"),
+        github_webhook_secret=SecretStr("github-webhook-secret"),
+        google_client_id="google-client",
+        google_client_secret=SecretStr("google-secret"),
+        google_redirect_uri="http://localhost:8000/api/v1/providers/gmail/oauth/callback",
+        weather_latitude=41.9,
+        weather_longitude=-87.6,
+        weather_timezone="America/Chicago",
+        credential_encryption_key=SecretStr(Fernet.generate_key().decode("ascii")),
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+
+    class FakeEngine:
+        async def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr(routes, "engine", FakeEngine())
+    with TestClient(routes.app):
+        registry = routes.app.state.provider_registry
+        assert {source.provider_id for source in registry.poll_sources} == {
+            "football",
+            "github",
+            "spotify",
+            "gmail",
+            "weather",
+        }
+        assert registry.webhook_source("github") is not None
+        assert registry.command_target("spotify") is not None
 
 
 def test_health_aggregation_never_promotes_unknown_or_failed_dependencies() -> None:
@@ -28,6 +99,44 @@ def test_worker_health_becomes_degraded_when_heartbeat_goes_stale() -> None:
 
     assert component_snapshot("projector")["status"] == "degraded"
     assert component_snapshot("projector")["detail"] == "heartbeat_stale"
+
+
+@pytest.mark.asyncio
+async def test_configured_oauth_without_encryption_key_reports_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        spotify_client_id="spotify-client",
+        spotify_client_secret="spotify-secret",
+        spotify_redirect_uri="http://localhost:8000/api/v1/providers/spotify/oauth/callback",
+        google_client_id="google-client",
+        google_client_secret="google-secret",
+        google_redirect_uri="http://localhost:8000/api/v1/providers/gmail/oauth/callback",
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    monkeypatch.setattr(routes, "provider_health", ProviderHealthRegistry())
+
+    class EmptySession:
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def scalar(self, _query: object) -> None:
+            return None
+
+    monkeypatch.setattr(routes, "SessionFactory", EmptySession)
+
+    providers = await routes._provider_health_snapshot()
+
+    assert providers["spotify"]["configured"] is True
+    assert providers["spotify"]["status"] == "degraded"
+    assert providers["spotify"]["detail_code"] == "credential_encryption_unavailable"
+    assert providers["gmail"]["configured"] is True
+    assert providers["gmail"]["status"] == "degraded"
+    assert providers["gmail"]["detail_code"] == "credential_encryption_unavailable"
 
 
 @pytest.mark.asyncio

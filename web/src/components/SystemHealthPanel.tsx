@@ -18,6 +18,12 @@ const statusLabel: Record<HealthStatus, string> = {
   unavailable: 'UNAVAILABLE',
   disconnected: 'DISCONNECTED',
   unknown: 'UNKNOWN',
+  connecting: 'CONNECTING',
+  stale: 'STALE',
+  resyncing: 'RESYNCING',
+  rate_limited: 'RATE LIMITED',
+  auth_failure: 'AUTH FAILURE',
+  provider_failure: 'PROVIDER FAILURE',
 }
 
 function StatusIcon({ status }: { status: HealthStatus }) {

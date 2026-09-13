@@ -305,10 +305,16 @@ async def test_daily_quota_tracks_headers_local_fallback_and_utc_reset() -> None
     budget.requests_used = 95
     budget.requests_remaining_header = None
     assert not budget.can_request(now=start)
+    with pytest.raises(FootballRateLimitError) as exhausted:
+        await budget.reserve(now=start)
+    assert exhausted.value.retry_after == datetime(2026, 9, 13, 0, tzinfo=UTC)
     budget.restore(snapshot, now=start + timedelta(minutes=2))
     assert budget.requests_used == 0
     assert budget.requests_remaining_header is None
-    assert len(writes) == 2
+    assert budget.can_request(now=start + timedelta(minutes=2))
+    await budget.reserve(now=start + timedelta(minutes=2))
+    assert budget.requests_used == 1
+    assert len(writes) == 3
 
 
 def test_adaptive_cadence_covers_idle_upcoming_live_halftime_and_quota() -> None:
@@ -324,15 +330,21 @@ def test_adaptive_cadence_covers_idle_upcoming_live_halftime_and_quota() -> None
         adaptive_cadence(
             [make_match(kickoff=NOW + timedelta(minutes=20))], now=NOW, quota_remaining=95
         )
-        == timedelta(minutes=12)
+        == timedelta(minutes=5)
+    )
+    assert (
+        adaptive_cadence(
+            [make_match(kickoff=NOW + timedelta(minutes=4))], now=NOW, quota_remaining=95
+        )
+        == timedelta(seconds=150)
     )
     assert (
         adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=95)
-        == timedelta(minutes=10)
+        == timedelta(seconds=150)
     )
     assert (
         adaptive_cadence([make_match(status="HT")], now=NOW, quota_remaining=95)
-        == timedelta(minutes=18)
+        == timedelta(minutes=5)
     )
     assert (
         adaptive_cadence(
@@ -342,12 +354,49 @@ def test_adaptive_cadence_covers_idle_upcoming_live_halftime_and_quota() -> None
     )
     assert (
         adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=20)
-        == timedelta(minutes=30)
+        == timedelta(minutes=5)
     )
     assert (
         adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=10)
-        == timedelta(hours=1)
+        == timedelta(minutes=10)
     )
+    assert (
+        adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=40)
+        == timedelta(minutes=3)
+    )
+    assert (
+        adaptive_cadence(
+            [make_match(status="1H")], now=NOW, quota_remaining=95, request_cost=2
+        )
+        == timedelta(minutes=5)
+    )
+
+
+def test_cadence_decision_explains_live_quota_degradation_and_idle_slowdown() -> None:
+    from app.providers.football.cadence import adaptive_cadence_decision
+
+    healthy = adaptive_cadence_decision(
+        [make_match(status="2H")], now=NOW, quota_remaining=80
+    )
+    low = adaptive_cadence_decision([make_match(status="2H")], now=NOW, quota_remaining=14)
+    idle = adaptive_cadence_decision([], now=NOW, quota_remaining=80)
+
+    assert healthy.interval == timedelta(seconds=150)
+    assert healthy.reason == "active_live_match"
+    assert low.interval == timedelta(minutes=10)
+    assert low.reason == "daily_quota_degraded_10m"
+    assert idle.interval == timedelta(hours=12)
+    assert idle.reason == "no_live_or_upcoming_match"
+
+
+def test_upcoming_fixture_service_covers_a_seven_day_horizon() -> None:
+    from app.providers.football.service import FootballFixtureService
+
+    service = FootballFixtureService()
+    fifth_day = make_match(kickoff=NOW + timedelta(days=5))
+    service.replace([fifth_day], observed_at=NOW)
+
+    assert [item.fixture_id for item in service.upcoming(now=NOW)] == [fifth_day.fixture_id]
 
 
 def test_missing_key_keeps_provider_disconnected() -> None:
@@ -513,9 +562,11 @@ def test_provider_health_reports_rate_limit_and_persistent_auth_failure() -> Non
     state = health.rate_limited("football", "rate_limited", cooldown)
     assert state.status == "rate_limited"
     assert state.rate_limited_until == cooldown
-    unavailable = health.failure("football", "authentication_failed", immediate_unavailable=True)
-    assert unavailable.status == "unavailable"
-    assert unavailable.consecutive_failures == 2
+    auth_failure = health.failure(
+        "football", "authentication_failed", immediate_unavailable=True
+    )
+    assert auth_failure.status == "auth_failure"
+    assert auth_failure.consecutive_failures == 2
 
 
 @pytest.mark.asyncio
@@ -562,7 +613,7 @@ async def test_source_filters_leagues_batches_live_details_and_serves_fixture_li
     assert len(schedule_requests) == 11
     assert all(
         request.url.params["from"] == "2026-09-12"
-        and request.url.params["to"] == "2026-09-13"
+        and request.url.params["to"] == "2026-09-18"
         and request.url.params["timezone"] == "UTC"
         for request in schedule_requests
     )

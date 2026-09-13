@@ -6,10 +6,9 @@ writes timeline rows directly.
 
 ## Configuration and repository scope
 
-Set `GITHUB_OWNER` to the GitHub user or organization that owns the repositories. The initial
-allowlist comes from `GITHUB_REPOSITORIES` and defaults to exactly `Strata,Tandem,OptiScale,LivePulse,Portfolio`.
-The adapter intersects configured names with that locked initial set; it does not enumerate the
-account or expand the allowlist. Leaving the setting empty disables repository processing.
+Set `GITHUB_OWNER` to the GitHub user or organization that owns all five monitored repositories:
+`Strata`, `Tandem`, `OptiScale`, `LivePulse`, and `Portfolio`. This list is fixed in code and cannot
+be widened or narrowed by environment configuration. The adapter does not enumerate the account.
 
 `GITHUB_WEBHOOK_SECRET` enables webhook verification. `GITHUB_TOKEN` enables reconciliation.
 Either capability can run without the other. Store both values only in the ignored local `.env`;
@@ -18,7 +17,8 @@ neither appears in health responses or logs.
 ## Webhook setup
 
 1. Make the LivePulse backend reachable from GitHub over HTTPS (for local development, use a
-   trusted development tunnel).
+   trusted development tunnel). Docker Compose binds host ports to `127.0.0.1`; it does not create
+   an inbound public endpoint or tunnel.
 2. In the GitHub organization/repository webhook settings, create a webhook pointed at
    `https://<your-livepulse-host>/api/v1/webhooks/github`, with content type `application/json`.
 3. Configure a high-entropy webhook secret in GitHub and the same value as `GITHUB_WEBHOOK_SECRET`
@@ -36,7 +36,9 @@ other actions do not create events.
 
 ## Reconciliation
 
-When `GITHUB_TOKEN` is present, startup begins a five-minute poll with timeout, jitter, exponential
+When `GITHUB_TOKEN` is present, the application registers the reconciliation source with the shared
+poll scheduler. The first five-minute poll runs in the background after application startup; source
+construction itself makes no provider request. The poll uses timeout, jitter, exponential
 backoff, and `Retry-After` support from the shared scheduler. It checks at most the ten most
 recently updated pull requests, ten recent workflow runs, and three deployments per configured
 repository, then fetches each selected deployment's latest status. Shared provider checkpoints are

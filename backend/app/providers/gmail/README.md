@@ -56,6 +56,13 @@ observation, failure count, rate-limit retry time, and safe error codes such as
 `reconnect_required` or `authorization_expired`. Missing Google configuration leaves Gmail
 disconnected without blocking application startup.
 
+The application registers the Gmail OAuth router and read-only service. When the client settings,
+redirect URI, and credential-encryption key are available, the incremental sync source is registered
+with the shared poll scheduler. Source construction does not contact Google; synchronization starts
+in the background after application startup only when a stored authorization is present. The system
+health response reports Gmail state without exposing account identifiers or credentials. M3 does not
+add a Gmail-specific frontend surface.
+
 P0 uses shared checkpointed polling instead of Google Pub/Sub. History sync is durable and
 reconcilable, and the four-minute cadence is sufficient for a personal dashboard. Deferring Pub/Sub
 keeps the 24-hour implementation within the existing backend while avoiding a separate cloud

@@ -322,7 +322,6 @@ def normalize_spotify_event(
             ensure_ascii=False,
         ).encode("utf-8")
     ).hexdigest()[:40]
-    version = snapshot.timestamp_ms or int(observation.observed_at.timestamp() * 1000)
     occurred_at = (
         datetime.fromtimestamp(snapshot.timestamp_ms / 1000, UTC)
         if snapshot.timestamp_ms is not None
@@ -335,7 +334,10 @@ def normalize_spotify_event(
         subject_id="current",
         occurred_at=occurred_at,
         observed_at=observation.observed_at,
-        version=max(1, version),
+        # Spotify timestamps are millisecond-scale values and exceed the
+        # canonical PostgreSQL INTEGER range. Spotify events are timeline-only;
+        # event identity/deduplication uses the provider timestamp and payload.
+        version=1,
         dedupe_key=f"spotify:{event_type}:{fingerprint}",
         correlation_id=correlation_id or observation.correlation_id or uuid7(),
         payload=payload,

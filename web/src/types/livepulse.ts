@@ -44,7 +44,18 @@ export type TimelineItem = {
 
 export type TimelineResponse = { items: TimelineItem[]; latest_cursor: number }
 
-export type HealthStatus = 'healthy' | 'degraded' | 'unavailable' | 'unknown' | 'disconnected'
+export type HealthStatus =
+  | 'healthy'
+  | 'degraded'
+  | 'unavailable'
+  | 'unknown'
+  | 'disconnected'
+  | 'connecting'
+  | 'stale'
+  | 'resyncing'
+  | 'rate_limited'
+  | 'auth_failure'
+  | 'provider_failure'
 
 export type HealthComponent = {
   name: string

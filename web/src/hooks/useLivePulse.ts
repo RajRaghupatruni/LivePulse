@@ -33,9 +33,14 @@ export function mergeRealtimeState(
   }
 }
 
+function compareTimelineItems(a: TimelineItem, b: TimelineItem): number {
+  const timeOrder = Date.parse(b.timestamp) - Date.parse(a.timestamp)
+  return Number.isNaN(timeOrder) || timeOrder === 0 ? b.cursor - a.cursor : timeOrder
+}
+
 function upsertTimeline(items: TimelineItem[], item: TimelineItem): TimelineItem[] {
   if (items.some((entry) => entry.event_id === item.event_id)) return items
-  return [item, ...items].sort((a, b) => b.cursor - a.cursor).slice(0, 100)
+  return [item, ...items].sort(compareTimelineItems).slice(0, 100)
 }
 
 export function useLivePulse() {
@@ -76,7 +81,7 @@ export function useLivePulse() {
     const [state, history] = await Promise.all([getLiveState(), getTimeline()])
     if (generation !== snapshotGeneration.current) return
     commitLive(state)
-    setTimeline(history.items)
+    setTimeline([...history.items].sort(compareTimelineItems))
     cursor.current = Math.max(cursor.current, history.latest_cursor)
   }, [commitLive])
 

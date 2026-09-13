@@ -11,7 +11,7 @@ from app.providers.football.api import (
     FootballApiClient,
     FootballRateLimitError,
 )
-from app.providers.football.cadence import adaptive_cadence
+from app.providers.football.cadence import CadenceDecision, adaptive_cadence_decision
 from app.providers.football.leagues import resolve_league_metadata
 from app.providers.football.models import (
     FixtureRecord,
@@ -27,6 +27,7 @@ from app.providers.status import provider_health
 CATALOG_TTL = timedelta(days=7)
 CALENDAR_TTL = timedelta(hours=20)
 LIVE_LOOKAHEAD = timedelta(hours=6)
+DISCOVERY_HORIZON_DAYS = 7
 
 
 class FootballPollSource:
@@ -57,6 +58,8 @@ class FootballPollSource:
         self._catalog_loaded_at: datetime | None = None
         self._fixtures: dict[int, FootballFixtureObservation] = {}
         self._pending_final_ids: set[int] = set()
+        self._last_live_request_cost = 1
+        self._cadence_decision: CadenceDecision | None = None
         self._fixture_service = fixture_service or football_fixture_service
         self._last_observation_at: datetime | None = None
 
@@ -96,17 +99,48 @@ class FootballPollSource:
             else fixture
             for fixture in self._fixtures.values()
         ]
-        return adaptive_cadence(
+        decision = adaptive_cadence_decision(
             cadence_fixtures,
             now=context.scheduled_at,
             quota_remaining=int(quota["requests_remaining"]),
             minute_remaining=quota["requests_per_minute_remaining"],
+            request_cost=self._last_live_request_cost,
         )
+        if int(quota["requests_remaining"]) <= self.api.budget.safety_reserve:
+            decision = CadenceDecision(
+                max(
+                    self.api.budget.next_reset(now=context.scheduled_at)
+                    - context.scheduled_at,
+                    timedelta(seconds=1),
+                ),
+                "daily_budget_exhausted",
+            )
+            provider_health.rate_limited(
+                self.provider_id,
+                decision.reason,
+                self.api.budget.next_reset(now=context.scheduled_at),
+            )
+        elif decision.reason.startswith("daily_quota_"):
+            provider_health.report(
+                self.provider_id,
+                "degraded",
+                decision.reason,
+                configured=True,
+            )
+        self._cadence_decision = decision
+        self._fixture_service.cadence = {
+            "interval_seconds": decision.interval.total_seconds(),
+            "reason": decision.reason,
+            "request_cost": self._last_live_request_cost,
+            "decided_at": context.scheduled_at.isoformat(),
+        }
+        return decision.interval
 
     def health_snapshot(self) -> dict[str, Any]:
         return {
             "provider": provider_health.snapshot().get("football"),
             "quota": self.api.budget.snapshot(now=self._clock()),
+            "cadence": self._fixture_service.cadence,
             "last_observation_at": (
                 self._last_observation_at.isoformat() if self._last_observation_at else None
             ),
@@ -141,9 +175,10 @@ class FootballPollSource:
             self._last_observation_at = now
             return ()
 
-        today, tomorrow = now.date(), now.date() + timedelta(days=1)
+        today = now.date()
+        horizon_end = today + timedelta(days=DISCOVERY_HORIZON_DAYS - 1)
         by_id: dict[int, FootballFixtureObservation] = {}
-        for fixture in await self._calendar_window(today, tomorrow, now):
+        for fixture in await self._calendar_window(today, horizon_end, now):
             by_id[fixture.fixture_id] = fixture
 
         pending_final_ids = set(await self._pending_final_verification_ids())
@@ -151,6 +186,7 @@ class FootballPollSource:
         self._pending_final_ids = pending_final_ids
         updated_dates: set[date] = set()
         if self._should_poll_live(tuple(by_id.values()), now):
+            before_live_query = self.api.budget.requests_used
             live_records = await self.api.live_fixtures(list(self._catalog.values()))
             normalized_live = self._normalize_records(live_records)
             live_ids = {record.fixture.id for record in live_records}
@@ -176,6 +212,9 @@ class FootballPollSource:
                     normalized_live,
                     self._normalize_records(list(details_by_id.values())),
                 )
+            self._last_live_request_cost = max(
+                1, self.api.budget.requests_used - before_live_query
+            )
             by_id.update({fixture.fixture_id: fixture for fixture in normalized_live})
             updated_dates.update(fixture.kickoff_at.date() for fixture in normalized_live)
 
@@ -190,7 +229,7 @@ class FootballPollSource:
         # stale "live" candidate and consume quota after its final verification.
         if updated_dates:
             await self.store.put_json(
-                self._calendar_key(today, tomorrow),
+                self._calendar_key(today, horizon_end),
                 {
                     "items": [
                         item.model_copy(update={"final_verification": False}).model_dump(

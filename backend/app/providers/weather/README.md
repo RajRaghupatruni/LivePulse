@@ -5,6 +5,11 @@ HTTP details, WMO code normalization, and units remain inside this package. The 
 current-weather service is exposed at `GET /api/v1/providers/weather/current`; freshness is
 available at `GET /api/v1/providers/weather/health`.
 
+The application registers the source with the shared poll scheduler only when latitude,
+longitude, and timezone are all configured. Construction makes no network request; the first
+forecast poll runs in the background after startup. Blank latitude/longitude values are
+treated as missing configuration and report disconnected health.
+
 ## Configuration and fields
 
 Set `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, and `WEATHER_TIMEZONE` in the ignored local `.env`.

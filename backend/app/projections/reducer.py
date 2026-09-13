@@ -9,6 +9,13 @@ def reduce_match_state(current: dict[str, Any] | None, event: CanonicalEvent) ->
     payload = event.payload
     if current and event.version <= current["version"]:
         return current
+    # Keep delayed post-match facts in the timeline without allowing them to
+    # rewrite the authoritative final score or phase. Explicit score corrections
+    # remain valid because they represent a corrected final result.
+    if current and current["status"] == "fulltime" and not event.event_type.endswith(
+        ".score_corrected"
+    ):
+        return current
     state = {
         "match_id": event.subject_id,
         "home_team": str(payload["home_team"]),

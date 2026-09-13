@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel
 
-from app.core.config import LOCKED_GITHUB_REPOSITORIES, Settings
+from app.core.config import MONITORED_GITHUB_REPOSITORIES, Settings
 from app.providers.base import PollContext, PollSchedule
 from app.providers.github.client import GithubApiError, GithubRestClient
 from app.providers.github.events import (
@@ -284,11 +284,8 @@ def _change(
 
 
 def _configured_repositories(settings: Settings) -> tuple[str, ...]:
-    return tuple(
-        name
-        for name in settings.github_repositories
-        if name.casefold() in LOCKED_GITHUB_REPOSITORIES
-    )
+    del settings
+    return MONITORED_GITHUB_REPOSITORIES
 
 
 def _text(value: object, default: str = "") -> str:

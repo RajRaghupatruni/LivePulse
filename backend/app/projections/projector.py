@@ -65,7 +65,12 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
                     )
                 else:
                     next_state = reduce_match_state(current, event)
-                    if current_row is None:
+                    if next_state is current:
+                        # A newer-version late fact after full time is retained
+                        # in the timeline without issuing a false live-state
+                        # notification or rewriting the final projection.
+                        next_state = None
+                    elif current_row is None:
                         current_row = MatchStateRow(
                             match_id=event.subject_id, **_match_state_fields(next_state)
                         )

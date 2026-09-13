@@ -844,6 +844,8 @@ async def test_event_sink_uses_canonical_event_outbox_writer(
         event.subject_id == "current" and event.dedupe_key.startswith("spotify:")
         for event in persisted
     )
+    assert all(event.version == 1 for event in persisted)
+    assert all(event.occurred_at <= event.observed_at for event in persisted)
 
 
 @pytest.mark.asyncio
@@ -857,7 +859,7 @@ async def test_spotify_canonical_event_projects_to_timeline_without_touching_mat
         subject_id="current",
         occurred_at=NOW,
         observed_at=NOW,
-        version=int(NOW.timestamp() * 1000),
+        version=1,
         dedupe_key="spotify:track.changed:deterministic-test",
         correlation_id=uuid7(),
         payload={"item_uri": "spotify:track:track-1", "item_name": "Song track-1"},

@@ -1,11 +1,17 @@
 from functools import lru_cache
-from typing import Annotated
 
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
+MONITORED_GITHUB_REPOSITORIES = (
+    "Strata",
+    "Tandem",
+    "OptiScale",
+    "LivePulse",
+    "Portfolio",
+)
 LOCKED_GITHUB_REPOSITORIES = frozenset(
-    {"strata", "tandem", "optiscale", "livepulse", "portfolio"}
+    name.casefold() for name in MONITORED_GITHUB_REPOSITORIES
 )
 
 
@@ -28,9 +34,6 @@ class Settings(BaseSettings):
     github_owner: str | None = None
     github_token: SecretStr | None = None
     github_webhook_secret: SecretStr | None = None
-    github_repositories: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["Strata", "Tandem", "OptiScale", "LivePulse", "Portfolio"]
-    )
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
     google_redirect_uri: str | None = None
@@ -45,15 +48,6 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
-
-    @field_validator("github_repositories", mode="before")
-    @classmethod
-    def parse_github_repositories(cls, value: object) -> list[str]:
-        if isinstance(value, str):
-            return [name.strip() for name in value.split(",") if name.strip()]
-        if isinstance(value, list):
-            return [str(name).strip() for name in value if str(name).strip()]
-        raise ValueError("GITHUB_REPOSITORIES must be a comma-separated string")
 
     def provider_configuration(self) -> dict[str, bool]:
         """Report configuration completeness without exposing credential values."""
@@ -72,10 +66,7 @@ class Settings(BaseSettings):
                     self.spotify_redirect_uri,
                 )
             ),
-            "github": any(
-                name.casefold() in LOCKED_GITHUB_REPOSITORIES for name in self.github_repositories
-            )
-            and has(self.github_owner)
+            "github": has(self.github_owner)
             and (has(self.github_token) or has(self.github_webhook_secret)),
             "gmail": all(
                 has(value)

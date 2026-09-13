@@ -37,7 +37,7 @@ It does not call `GET /me/player/currently-playing`, so it does not request `use
 
 ## Polling and rate limits
 
-Register `spotify_provider.poll_source` with the shared `PollScheduler` and use `spotify_provider.event_sink.handle` as its observation handler. The source adapts its cadence to the most recent response:
+The application registers `spotify_provider.poll_source` with the shared `PollScheduler` when OAuth settings and credential encryption are available, and uses `spotify_provider.event_sink.handle` as its observation handler. Source construction does not make an HTTP request; the first poll runs in the background after application startup. The source adapts its cadence to the most recent response:
 
 | State | Base interval |
 |---|---:|
@@ -84,8 +84,8 @@ Player control, seeking, volume, and transfer require Spotify Premium. Device av
 
 ## Router and integration
 
-The provider router is exported from `app.providers.spotify.router` as `router`; `create_spotify_router(provider=...)` supports isolated registration and tests. The main app can register it with `app.include_router(router)`. The provider composition object also exposes `poll_source`, `event_sink.handle`, `command_target`, and `health`. No main-app route or lifespan wiring is added in this provider branch.
+The provider router is exported from `app.providers.spotify.router` as `router`; `create_spotify_router(provider=...)` supports isolated registration and tests. The application includes its OAuth, connection, playback, devices, and command routes, registers its command target and poll source, and aggregates provider health. Polling requires a complete OAuth configuration, Fernet encryption key, and stored authorization; otherwise health is disconnected or degraded with a safe configuration detail. No Spotify account or provider-specific UI is required for application startup, and M3 adds no Spotify-specific frontend surface.
 
 ## Manual check
 
-After app registration and environment setup, open `GET /api/v1/providers/spotify/oauth/start` in a browser, approve the requested playback scopes, and confirm that the callback returns only `{ "provider": "spotify", "connected": true }`. Then inspect `GET /api/v1/providers/spotify/connection` and `GET /api/v1/providers/spotify/playback`, and exercise a player command while a Spotify Connect device is active. Provider tests use mocked HTTP and do not require an account.
+After environment setup, open `GET /api/v1/providers/spotify/oauth/start` in a browser, approve the requested playback scopes, and confirm that the callback returns only `{ "provider": "spotify", "connected": true }`. Then inspect `GET /api/v1/providers/spotify/connection` and `GET /api/v1/providers/spotify/playback`, and exercise a player command while a Spotify Connect device is active. Provider tests use mocked HTTP and do not require an account.

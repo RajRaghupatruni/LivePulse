@@ -133,4 +133,55 @@ describe('inactive-match realtime notifications', () => {
     expect(result.current.timeline).toHaveLength(1)
     unmount()
   })
+
+  it('orders mixed-domain timeline events by occurrence time and cursor', async () => {
+    vi.mocked(getTimeline).mockResolvedValue({
+      items: [
+        {
+          cursor: 2,
+          event_id: 'newer-weather',
+          event_type: 'weather.conditions.updated',
+          source: 'weather',
+          subject_id: 'configured-location',
+          timestamp: '2026-09-12T20:00:02Z',
+          payload: {},
+        },
+        {
+          cursor: 1,
+          event_id: 'older-football',
+          event_type: 'football.match.kickoff',
+          source: 'api-football',
+          subject_id: 'active-match',
+          timestamp: '2026-09-12T20:00:01Z',
+          payload: {},
+        },
+      ],
+      latest_cursor: 2,
+    })
+    const { result, unmount } = renderHook(() => useLivePulse())
+    await waitFor(() => expect(result.current.timeline).toHaveLength(2))
+    expect(result.current.timeline.map((item) => item.event_id)).toEqual([
+      'newer-weather',
+      'older-football',
+    ])
+
+    act(() =>
+      FakeWebSocket.instance.send({
+        type: 'timeline.item',
+        cursor: 3,
+        event_id: 'late-github',
+        event_type: 'developer.workflow.failed',
+        source: 'github',
+        timestamp: '2026-09-12T19:59:59Z',
+        payload: {},
+      }),
+    )
+    await waitFor(() => expect(result.current.timeline).toHaveLength(3))
+    expect(result.current.timeline.map((item) => item.event_id)).toEqual([
+      'newer-weather',
+      'older-football',
+      'late-github',
+    ])
+    unmount()
+  })
 })

@@ -34,6 +34,20 @@ def test_projection_transitions_and_ignores_stale_versions() -> None:
     assert (state["home_score"], state["away_score"], state["status"]) == (1, 1, "fulltime")
 
 
+def test_late_goal_does_not_change_final_match_state() -> None:
+    state = reduce_match_state(None, event("football.match.scheduled", 1))
+    state = reduce_match_state(state, event("football.match.kickoff", 2))
+    state = reduce_match_state(state, event("football.match.goal", 3, side="home"))
+    state = reduce_match_state(state, event("football.match.fulltime", 4, minute=90))
+
+    late_goal = reduce_match_state(
+        state,
+        event("football.match.goal", 5, side="away", minute=35),
+    )
+
+    assert late_goal == state
+
+
 def test_focus_engine_uses_deterministic_event_priority() -> None:
     now = datetime.now(UTC)
     goal = focus_for_match("live", "football.match.goal", now, now, subject_id="match-1")

@@ -1,8 +1,8 @@
 # LivePulse
 
-LivePulse is a single-user realtime command center built around a durable event platform. M1 proves the end-to-end path using one deterministic simulated football match: observation → normalization → PostgreSQL event and transactional outbox → Redpanda → idempotent projection → Pulse Timeline → recoverable WebSocket → browser. M2 adds a focus-led desktop shell, backend-owned deterministic Match Mode/attention, observed component health, explicit local commands, and visible reconnect/resync states without changing that event path.
+LivePulse is a single-user realtime command center built around a durable event platform. M1 proved the event path with a deterministic simulated football match; M2 added backend-owned focus and recovery-aware UI; M3 integrates real football, GitHub, Spotify, Gmail, and weather sources into canonical events, the transactional outbox, Redpanda, idempotent projections, the durable Pulse Timeline, and replayable realtime delivery. Provider credentials are optional, and the application boots without them.
 
-The locked P0 direction and implementation status live in [PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md). Review [ARCHITECTURE.md](docs/ARCHITECTURE.md), its accepted ADRs, and [DEFINITION_OF_DONE.md](docs/DEFINITION_OF_DONE.md) before changing core behavior. M3 adds shared provider integration contracts only; no real provider client is enabled yet.
+The locked P0 direction and implementation status live in [PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md). Review [ARCHITECTURE.md](docs/ARCHITECTURE.md), its accepted ADRs, and [DEFINITION_OF_DONE.md](docs/DEFINITION_OF_DONE.md) before changing core behavior. Provider setup and data handling are documented in [SECURITY_AND_PRIVACY.md](docs/SECURITY_AND_PRIVACY.md) and the provider-local READMEs.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ The development script also waits for PostgreSQL and Redpanda health before runn
 docker compose up --build
 ```
 
-It exposes the web client on port 5173, API on 8000, PostgreSQL on 5432, and Redpanda Kafka on 19092.
+It binds the web client on `127.0.0.1:5173`, API on `127.0.0.1:8000`, PostgreSQL on `127.0.0.1:5432`, and Redpanda Kafka on `127.0.0.1:19092`. This local stack has no application authentication and must not be exposed to an untrusted network.
 
 ## Demo
 
@@ -61,11 +61,11 @@ Useful endpoints:
 
 The command bar stays available at the bottom of the page. Press **Ctrl+K** or **Cmd+K** to focus it. Supported local commands are `run demo`, `reset demo`, `show system health`, `show match`, and `close`; unknown questions are not sent to AI and receive the message that AI chat connects in the intelligence milestone. The header clock uses the browser's local timezone. The health detail panel shows only observed local component/probe and worker-heartbeat state.
 
-## M3 integration foundation
+## M3 provider integration
 
-The backend now has separate provider package boundaries, typed poll/webhook/command capabilities, a typed normalized `Observation` contract, an explicit capability registry, a bounded single-instance poll scheduler, and secret-free provider status in the `providers` section of system health. The shared database migration adds provider connection and checkpoint records. Credential persistence accepts only an encrypted wrapper; configure `CREDENTIAL_ENCRYPTION_KEY` with a locally generated Fernet key before a future provider stores OAuth credentials. Missing provider configuration is optional and does not block app startup.
+The backend registers five real provider paths: API-Football observations; GitHub signed webhooks and bounded reconciliation; Spotify OAuth, playback polling, and typed playback commands; Gmail OAuth and read-only incremental sync; and Open-Meteo current conditions plus meaningful-change events. Poll sources share one bounded scheduler. Provider DTOs end at their adapters. Canonical events use the transactional PostgreSQL outbox and Redpanda, then the idempotent projector writes the Pulse Timeline. Football event families alone update football match state; GitHub, Spotify, Gmail, and weather use one generalized timeline-only projection path. All five optional provider configurations can remain blank without preventing startup.
 
-`.env.example` lists optional provider settings, and `.env` is ignored by Git. Personal weather coordinates belong only in the local `.env`. These settings and package boundaries establish interfaces, not working integrations: API-Football, Spotify, GitHub, Gmail, Open-Meteo, and OpenAI are not called. M4 AI remains out of scope. Run `python -m pytest tests/unit/test_provider_foundation.py` from `backend` to exercise the shared contracts without network services.
+Set local values in the ignored `.env` copied from `.env.example`. Spotify and Gmail require a generated `CREDENTIAL_ENCRYPTION_KEY`; GitHub webhook and reconciliation capabilities are independently configured; football needs an API-Football key; weather requires local latitude, longitude, and timezone. Empty weather coordinates parse as unconfigured. Source construction does not make provider API calls during app startup. See each provider README for OAuth permissions, scopes, quota behavior, and local setup. M4 AI and the high-fidelity adaptive UI remain out of scope.
 
 ## Tests and checks
 
@@ -73,7 +73,7 @@ The backend now has separate provider package boundaries, typed poll/webhook/com
 ./scripts/test.ps1
 ```
 
-That runs Ruff and backend unit tests, then frontend lint/typecheck, Vitest, and production build. The PostgreSQL + Redpanda vertical integration test is opt-in locally:
+That runs Ruff and backend tests, then frontend lint/typecheck, Vitest, and production build. The PostgreSQL + Redpanda integration suite is opt-in locally:
 
 ```powershell
 docker compose up -d --wait postgres redpanda
@@ -94,4 +94,4 @@ CI runs that vertical test against PostgreSQL and Redpanda services, alongside l
 
 Publication and consumption are at-least-once, not exactly-once. A crash after broker acknowledgement and before marking an outbox row published can republish the same canonical event. The projector records `(consumer, event_id)` in the same transaction as state and timeline updates, so duplicates do not double-apply. WebSocket messages are notifications, not authority: reconnect replays rows after the supplied cursor, and the client reloads live state and timeline from REST. PostgreSQL holds the critical event history; Redis is intentionally absent.
 
-M1/M2 are local development/demo foundations, not a public deployment. M2's deterministic Focus Engine and Match Mode derive from server state; REST remains authoritative and WebSocket remains recoverable incremental delivery. Later milestones are locked in the product requirements, including real provider integrations, security/threat model, full AI chat/search/tools, production instrumentation, load tests, Terraform, and deterministic public demo mode.
+M1–M3 are local development foundations, not a public deployment. M2's deterministic Focus Engine and Match Mode derive from server state; REST remains authoritative and WebSocket remains recoverable incremental delivery. Provider data can contain personal metadata; the local app has no user authentication, public-demo isolation, or retention UI. Do not expose it publicly. M4 AI, production instrumentation, load tests, Terraform, and deterministic public demo mode remain future work.

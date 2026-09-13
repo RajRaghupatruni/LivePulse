@@ -16,6 +16,7 @@ class FootballFixtureService:
         self._fixtures: dict[int, FootballFixtureObservation] = {}
         self.last_observation_at: datetime | None = None
         self.quota: dict[str, Any] | None = None
+        self.cadence: dict[str, Any] | None = None
 
     def replace(
         self,
@@ -34,7 +35,7 @@ class FootballFixtureService:
         )
 
     def upcoming(
-        self, *, now: datetime | None = None, within: timedelta = timedelta(days=2)
+        self, *, now: datetime | None = None, within: timedelta = timedelta(days=7)
     ) -> list[FixtureSummary]:
         current = (now or datetime.now(UTC)).astimezone(UTC)
         return self._summaries(
@@ -56,6 +57,7 @@ class FootballFixtureService:
             "last_observation_at": (
                 self.last_observation_at.isoformat() if self.last_observation_at else None
             ),
+            "cadence": self.cadence,
             "today": [item.model_dump(mode="json") for item in self.today(now=now)],
             "upcoming": [item.model_dump(mode="json") for item in self.upcoming(now=now)],
             "live": [item.model_dump(mode="json") for item in self.live()],

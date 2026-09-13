@@ -9,7 +9,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.core.config import Settings, get_settings
 
 ProviderStatusCode = Literal[
-    "healthy", "degraded", "unavailable", "disconnected", "unknown", "rate_limited"
+    "healthy",
+    "degraded",
+    "stale",
+    "connecting",
+    "resyncing",
+    "rate_limited",
+    "auth_failure",
+    "provider_failure",
+    "unavailable",
+    "disconnected",
+    "unknown",
 ]
 PROVIDER_IDS = ("football", "spotify", "github", "gmail", "weather")
 
@@ -112,9 +122,28 @@ class ProviderHealthRegistry:
         with self._lock:
             previous = self._states.get(provider)
             count = (previous.consecutive_failures if previous else 0) + 1
+            if detail_code in {
+                "authentication_failed",
+                "authorization_expired",
+                "authorization_required",
+                "authorization_exchange_failed",
+                "not_authenticated",
+                "reconnect_required",
+                "stored_credentials_unavailable",
+                "github_unauthorized",
+                "github_forbidden",
+                "permission_denied",
+            }:
+                status: ProviderStatusCode = "auth_failure"
+            else:
+                status = (
+                    "unavailable"
+                    if immediate_unavailable or count >= 3
+                    else "provider_failure"
+                )
             return self.report(
                 provider,
-                "unavailable" if immediate_unavailable or count >= 3 else "degraded",
+                status,
                 detail_code,
                 configured=True,
                 failed=True,

@@ -7,7 +7,7 @@ import pytest
 from pydantic import SecretStr
 from uuid6 import uuid7
 
-from app.core.config import Settings
+from app.core.config import MONITORED_GITHUB_REPOSITORIES, Settings
 from app.providers.base import PollContext
 from app.providers.github.client import GithubApiError, normalize_api_error
 from app.providers.github.events import normalize_webhook
@@ -64,14 +64,19 @@ async def test_webhook_signature_valid_invalid_missing_and_constant_time_api(
     assert not verify_signature("webhook-secret", _signature("wrong", body), body)
     assert not verify_signature("webhook-secret", None, body)
 
-    processor = GithubWebhookProcessor(
-        persist=_memory_delivery_store(), health=GithubHealthTracker()
-    )
     headers = {
         "X-GitHub-Event": "push",
         "X-GitHub-Delivery": "delivery-1",
         "X-Hub-Signature-256": _signature("webhook-secret", body),
     }
+    processor = GithubWebhookProcessor(
+        persist=_memory_delivery_store(),
+        health=GithubHealthTracker(),
+        settings_getter=lambda: _settings(),
+    )
+    assert await processor.verify(headers=headers, body=body)
+    normalized = await processor.normalize(headers=headers, body=body, observed_at=NOW)
+    assert [change.content.event_type for change in normalized] == ["developer.push.received"]
     result, changes = await processor.process(
         settings=_settings(), headers=headers, raw_body=body, observed_at=NOW
     )
@@ -245,7 +250,7 @@ def test_github_webhook_event_mappings_and_irrelevant_action_suppression() -> No
 
 @pytest.mark.asyncio
 async def test_rest_reconciliation_uses_ids_and_checkpoints_to_suppress_repeat_events() -> None:
-    settings = _settings(github_token=SecretStr("token"), github_repositories="Strata")
+    settings = _settings(github_token=SecretStr("token"))
     checkpoint_values: dict[str, str] = {}
     checkpoint_queries: list[tuple[str, ...]] = []
 
@@ -317,8 +322,15 @@ async def test_rest_reconciliation_uses_ids_and_checkpoints_to_suppress_repeat_e
         "developer.workflow.completed",
         "developer.deployment.completed",
     }
-    assert len(first) == 6
-    assert len(set(client.paths)) == 4
+    assert len(first) == 6 * len(MONITORED_GITHUB_REPOSITORIES)
+    # Each repository costs pulls, workflow runs, deployments, and deployment
+    # status calls (when a deployment exists).
+    assert len(client.paths) == 4 * len(MONITORED_GITHUB_REPOSITORIES)
+    assert all(
+        any(f"/repos/acme/{repository}/" in path for path in client.paths)
+        for repository in MONITORED_GITHUB_REPOSITORIES
+    )
+    assert len(set(client.paths)) == 4 * len(MONITORED_GITHUB_REPOSITORIES)
     for item in first:
         checkpoint_values[item.content.checkpoint_key] = item.content.checkpoint_value
     second = await source.observe(context=context)
@@ -370,14 +382,21 @@ def test_github_health_distinguishes_webhook_and_reconciliation() -> None:
     assert healthy["reconciliation"]["status"] == "healthy"
     assert healthy["reconciliation"]["last_success_at"] == NOW.isoformat()
     stale = tracker.snapshot(token_settings, now=datetime(2026, 9, 12, 19, 0, tzinfo=UTC))
-    assert stale["reconciliation"]["status"] == "degraded"
+    assert stale["reconciliation"]["status"] == "stale"
     assert stale["reconciliation"]["detail_code"] == "reconciliation_stale"
 
 
 def test_github_configuration_cannot_expand_the_locked_repository_set() -> None:
     settings = _settings(github_repositories="EverythingElse")
-    assert settings.provider_configuration()["github"] is False
-    assert GithubHealthTracker.webhook_configured(settings) is False
+    assert settings.provider_configuration()["github"] is True
+    assert GithubHealthTracker.webhook_configured(settings) is True
+    assert MONITORED_GITHUB_REPOSITORIES == (
+        "Strata",
+        "Tandem",
+        "OptiScale",
+        "LivePulse",
+        "Portfolio",
+    )
 
 
 def _memory_delivery_store():
