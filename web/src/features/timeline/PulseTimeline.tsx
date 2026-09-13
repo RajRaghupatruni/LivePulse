@@ -1,79 +1,70 @@
+import { useEffect, useState, type KeyboardEvent } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { Activity, AlertTriangle, CircleDot, Flag, Goal, ShieldAlert, Square } from 'lucide-react'
+import { Activity, Cloud, ExternalLink, GitBranch, Mail, Music2, Trophy } from 'lucide-react'
 import type { TimelineItem } from '../../types/livepulse'
+import { presentTimelineItem, timeAgo } from '../../lib/timelinePresentation'
+import { openExternal } from '../../lib/platform'
 
-type EventPresentation = { title: string; category: string; Icon: typeof Goal }
+const iconFor = {
+  football: Trophy, spotify: Music2, github: GitBranch, gmail: Mail, weather: Cloud, system: Activity, other: Activity,
+} as const
 
-const eventDisplay: Record<string, EventPresentation> = {
-  'football.match.scheduled': { title: 'Match scheduled', category: 'fixture', Icon: Flag },
-  'football.match.kickoff': { title: 'Kick-off', category: 'live', Icon: CircleDot },
-  'football.match.goal': { title: 'Goal', category: 'goal', Icon: Goal },
-  'football.match.yellow_card': { title: 'Yellow card', category: 'card', Icon: Square },
-  'football.match.red_card': { title: 'Red card', category: 'critical', Icon: ShieldAlert },
-  'football.match.halftime': { title: 'Half-time', category: 'pause', Icon: Flag },
-  'football.match.second_half': { title: 'Second half', category: 'live', Icon: CircleDot },
-  'football.match.fulltime': { title: 'Full-time', category: 'complete', Icon: Flag },
+function displayTime(item: TimelineItem) {
+  const elapsed = timeAgo(item.timestamp)
+  return elapsed ?? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function eventDescription(item: TimelineItem) {
-  const side = item.payload.side === 'home' ? item.payload.home_team : item.payload.side === 'away' ? item.payload.away_team : null
-  if (item.event_type.endsWith('.goal')) return `${String(item.payload.player ?? 'Unknown')} · ${String(side ?? '')}`
-  if (item.event_type.includes('card')) return `${String(item.payload.player ?? 'Player')} · ${String(side ?? '')}`
-  if (item.payload.competition) return String(item.payload.competition)
-  if (item.payload.summary) return String(item.payload.summary)
-  return item.subject_id || sourceLabel(item.source)
-}
-
-function sourceLabel(source: string) {
-  return source.split(/[-_.]/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')
-}
-
-function eventTitle(item: TimelineItem) {
-  const known = eventDisplay[item.event_type]
-  if (known) return known
-  const lastPart = item.event_type.split('.').at(-1)?.replaceAll('_', ' ')
-  return {
-    title: lastPart ? lastPart.charAt(0).toUpperCase() + lastPart.slice(1) : 'Activity',
-    category: item.event_type.startsWith('system.') ? 'system' : 'activity',
-    Icon: item.event_type.startsWith('system.') ? AlertTriangle : Activity,
+export function PulseTimeline({ items, hasOlder = false, loadingOlder = false, onLoadOlder, onRefresh }: {
+  items: TimelineItem[]; hasOlder?: boolean; loadingOlder?: boolean; onLoadOlder?: () => void; onRefresh?: () => void
+}) {
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const reduced = useReducedMotion()
+  useEffect(() => {
+    if (!expanded) return
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      document.querySelectorAll<HTMLButtonElement>('.timeline-entry-main').forEach((button) => {
+        if (button.dataset.eventId === expanded) button.focus()
+      })
+      setExpanded(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [expanded])
+  const navigateRows = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const current = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>('.timeline-entry-main') : null
+    if (!current) return
+    const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('.timeline-entry-main'))
+    const index = rows.indexOf(current)
+    if (index < 0) return
+    const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+    event.preventDefault()
+    rows[nextIndex]?.focus()
   }
-}
-
-export function PulseTimeline({ items }: { items: TimelineItem[] }) {
-  const reduceMotion = useReducedMotion()
-  return (
-    <section className="timeline-panel" aria-label="Universal Pulse Timeline">
-      <div className="panel-heading"><div><span className="eyebrow">DURABLE EVENT HISTORY <i /></span><h2>Pulse Timeline</h2></div><span className="timeline-count">{String(items.length).padStart(2, '0')} <small>EVENTS</small></span></div>
-      {items.length === 0 ? (
-        <div className="timeline-empty"><div className="timeline-guide" /><span className="empty-pulse"><CircleDot size={17} /></span><p>Your signal, in sequence.</p><span>Live events surface here as they happen.</span></div>
-      ) : (
-        <div className="timeline-list" role="list">
-          <div className="timeline-guide" />
-          <AnimatePresence initial={false}>
-            {items.map((item, index) => {
-              const display = eventTitle(item)
-              const Icon = display.Icon
-              const minute = item.payload.minute
-              return (
-                <motion.article
-                  key={item.event_id}
-                  className={`timeline-item category-${display.category}`}
-                  role="listitem"
-                  layout={!reduceMotion}
-                  initial={reduceMotion ? false : { opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={reduceMotion ? undefined : { opacity: 0, y: 6 }}
-                  transition={{ duration: reduceMotion ? 0 : 0.22, delay: index === 0 ? 0.035 : 0 }}
-                >
-                  <span className="event-icon"><Icon size={15} strokeWidth={1.8} /></span>
-                  <div className="event-copy"><div><h3>{display.title}</h3><time dateTime={item.timestamp} title={new Date(item.timestamp).toLocaleString()}>{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div><p>{eventDescription(item)}</p><span className="event-source">{sourceLabel(item.source)}</span></div>
-                  <span className="event-minute">{typeof minute === 'number' && minute > 0 ? `${minute}′` : <span>—</span>}</span>
-                </motion.article>
-              )
-            })}
-          </AnimatePresence>
-        </div>
-      )}
-    </section>
-  )
+  return <section className="pulse-timeline" aria-label="Pulse Timeline">
+    <div className="timeline-current-marker"><span>NOW</span><i /></div>
+    {items.length === 0 ? <div className="timeline-empty"><span className="timeline-empty-mark"><Activity size={18} /></span><strong>Timeline establishing</strong><p>Events appear here as providers observe change.</p>{onRefresh && <button type="button" onClick={onRefresh}>Reconcile now</button>}</div> : <div className="timeline-list" role="feed" aria-label="Recent events" onKeyDown={navigateRows}>
+      <AnimatePresence initial={false} mode="popLayout">
+        {items.map((item, index) => {
+          const data = presentTimelineItem(item)
+          const Icon = iconFor[data.domain]
+          const isExpanded = expanded === item.event_id
+          const observed = item.observed_at ? new Date(item.observed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : null
+          const received = item.observed_at ? timeAgo(item.observed_at) : null
+          return <motion.article className={`timeline-entry domain-${data.domain} severity-${data.severity}${index === 0 ? ' timeline-entry-latest' : ''}`} key={item.event_id} layout initial={reduced ? false : { opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduced ? 0 : .28, ease: [.2, .8, .2, 1] }} aria-posinset={index + 1}>
+            <button className="timeline-entry-main" type="button" data-event-id={item.event_id} aria-expanded={isExpanded} onClick={() => setExpanded(isExpanded ? null : item.event_id)}>
+              <span className="timeline-domain-mark"><Icon size={16} strokeWidth={1.7} aria-hidden="true" />{data.severity === 'critical' && <i className="timeline-severity-mark" />}</span>
+              <span className="timeline-event-copy"><span className="timeline-event-head"><strong>{data.title}</strong><time dateTime={item.timestamp} title={new Date(item.timestamp).toLocaleString()}>{displayTime(item)}</time></span><span className="timeline-summary">{data.summary}</span>{data.detail && (isExpanded || data.domain === 'football') && <span className="timeline-detail">{data.detail}</span>}</span>
+              <span className="timeline-expand" aria-hidden="true">{isExpanded ? '−' : '+'}</span>
+            </button>
+            {isExpanded && <div className="timeline-entry-details"><span>Source <strong>{item.source}</strong></span><span>Observed <strong>{observed ?? 'Timestamp unavailable'}</strong></span><span>Freshness <strong>{received ?? 'Unavailable'}</strong></span>{data.safeHref && <button type="button" onClick={() => void openExternal(data.safeHref!)}>Open source <ExternalLink size={13} /></button>}</div>}
+          </motion.article>
+        })}
+      </AnimatePresence>
+    </div>}
+    {hasOlder && onLoadOlder && <button className="timeline-load-older" type="button" onClick={onLoadOlder} disabled={loadingOlder}><span>{loadingOlder ? 'Loading chronology…' : 'Load earlier events'}</span><span aria-hidden="true">{loadingOlder ? '···' : '↓'}</span></button>}
+    <div className="timeline-end-mark"><span /><span>CHRONOLOGY CONTINUES</span><span /></div>
+  </section>
 }

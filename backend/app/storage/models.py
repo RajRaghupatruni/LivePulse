@@ -115,7 +115,10 @@ class MatchStateRow(Base):
 
 class PulseTimelineRow(Base):
     __tablename__ = "pulse_timeline"
-    __table_args__ = (Index("ix_pulse_timeline_cursor", "cursor"),)
+    __table_args__ = (
+        Index("ix_pulse_timeline_cursor", "cursor"),
+        Index("ix_pulse_timeline_event_type_cursor", "event_type", "cursor"),
+    )
 
     cursor: Mapped[int] = mapped_column(
         BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from aiokafka import AIOKafkaProducer
@@ -31,6 +31,7 @@ from app.core.errors import LivePulseError, livepulse_error_handler
 from app.core.health import component_snapshot, overall_status, report_component
 from app.core.logging import configure_logging
 from app.core.security import TrustedBoundaryMiddleware
+from app.domain.attention import DominantFocus, select_dominant_focus
 from app.domain.focus import focus_for_match
 from app.outbox.publisher import run_publisher
 from app.projections.projector import run_projector
@@ -66,6 +67,7 @@ from app.realtime.manager import realtime
 from app.simulator.comeback import activate_match, clear_demo_data, run_comeback
 from app.storage.database import SessionFactory, engine, get_session
 from app.storage.models import (
+    CanonicalEventRow,
     DemoControlRow,
     MatchStateRow,
     ProviderConnectionRow,
@@ -77,6 +79,132 @@ router = APIRouter()
 scenario_lock = asyncio.Lock()
 scenario_task: asyncio.Task[None] | None = None
 active_scenario_id: str | None = None
+_TRANSIENT_ATTENTION_TTL = timedelta(seconds=12)
+
+
+def _iso_utc(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
+
+
+def _aware_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+async def _dominant_focus(
+    session: AsyncSession, match: MatchStateRow | None, focus: Any
+) -> DominantFocus | None:
+    now = datetime.now(UTC)
+    candidates: list[DominantFocus] = []
+    if match is not None:
+        canonical = (
+            await session.get(CanonicalEventRow, match.last_event_id)
+            if match.last_event_id is not None
+            else None
+        )
+        observed_at = (
+            _aware_utc(canonical.observed_at)
+            if canonical
+            else _aware_utc(match.updated_at)
+        )
+        candidates.append(
+            DominantFocus(
+                priority=focus.score,
+                domain="football",
+                reason=focus.reason,
+                subject_id=match.match_id,
+                event_id=str(match.last_event_id) if match.last_event_id else None,
+                transient=focus.transient,
+                created_at=_aware_utc(match.updated_at),
+                observed_at=observed_at,
+                expires_at=focus.expires_at,
+            )
+        )
+
+    relevant_types = (
+        "mail.message.received",
+        "mail.thread.updated",
+        "developer.workflow.failed",
+        "developer.deployment.failed",
+    )
+    recent_rows = await session.execute(
+        select(PulseTimelineRow, CanonicalEventRow.observed_at)
+        .join(CanonicalEventRow, CanonicalEventRow.event_id == PulseTimelineRow.event_id)
+        .where(
+            PulseTimelineRow.event_type.in_(relevant_types),
+            CanonicalEventRow.observed_at >= now - _TRANSIENT_ATTENTION_TTL,
+            CanonicalEventRow.observed_at <= now,
+        )
+        .order_by(PulseTimelineRow.cursor.desc())
+        .limit(50)
+    )
+    for row, observed in recent_rows:
+        observed_at = _aware_utc(observed)
+        age = now - observed_at
+        if age < timedelta(0) or age > _TRANSIENT_ATTENTION_TTL:
+            continue
+        if row.event_type in {"mail.message.received", "mail.thread.updated"}:
+            if (
+                row.payload.get("important") is not True
+                or row.payload.get("message_removed") is True
+            ):
+                continue
+            priority, domain, reason = 85, "gmail", "important_mail"
+        else:
+            priority, domain, reason = 80, "github", "ci_failure"
+        candidates.append(
+            DominantFocus(
+                priority=priority,
+                domain=domain,
+                reason=reason,
+                subject_id=row.subject_id,
+                event_id=str(row.event_id),
+                transient=True,
+                created_at=_aware_utc(row.occurred_at),
+                observed_at=observed_at,
+                expires_at=observed_at + _TRANSIENT_ATTENTION_TTL,
+            )
+        )
+
+    provider_states = provider_health.snapshot(get_settings())
+    persistent_provider_states = {
+        "degraded",
+        "stale",
+        "rate_limited",
+        "auth_failure",
+        "provider_failure",
+        "unavailable",
+    }
+    for provider, state in provider_states.items():
+        if (
+            state.get("configured") is not True
+            or state.get("status") not in persistent_provider_states
+        ):
+            continue
+        timestamp = state.get("last_failure_at") or state.get("checked_at")
+        try:
+            observed_at = (
+                _aware_utc(datetime.fromisoformat(timestamp))
+                if isinstance(timestamp, str)
+                else now
+            )
+        except ValueError:
+            observed_at = now
+        candidates.append(
+            DominantFocus(
+                priority=65,
+                domain="system",
+                reason="provider_degraded",
+                subject_id=provider,
+                event_id=None,
+                transient=False,
+                created_at=observed_at,
+                observed_at=observed_at,
+            )
+        )
+
+    return select_dominant_focus(candidates)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -546,10 +674,12 @@ async def live_state(session: AsyncSession = Depends(get_session)) -> dict[str, 
     )
     if match is None:
         focus = focus_for_match("idle", None)
+        dominant = await _dominant_focus(session, None, focus)
         return {
             "match": None,
             "attention": focus.score,
             "focus": focus.model_dump(mode="json"),
+            "dominant_focus": dominant.model_dump(mode="json") if dominant else None,
             "updated_at": None,
         }
     focus = focus_for_match(
@@ -559,6 +689,7 @@ async def live_state(session: AsyncSession = Depends(get_session)) -> dict[str, 
         source="football",
         subject_id=match.match_id,
     )
+    dominant = await _dominant_focus(session, match, focus)
     return {
         "match": {
             "match_id": match.match_id,
@@ -577,6 +708,7 @@ async def live_state(session: AsyncSession = Depends(get_session)) -> dict[str, 
         },
         "attention": focus.score,
         "focus": focus.model_dump(mode="json"),
+        "dominant_focus": dominant.model_dump(mode="json") if dominant else None,
         "updated_at": match.updated_at.isoformat(),
     }
 
@@ -587,14 +719,19 @@ async def timeline(
     before: int | None = Query(default=None, ge=1),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    query = select(PulseTimelineRow).order_by(PulseTimelineRow.cursor.desc()).limit(limit)
+    query = (
+        select(PulseTimelineRow, CanonicalEventRow.observed_at)
+        .join(CanonicalEventRow, CanonicalEventRow.event_id == PulseTimelineRow.event_id)
+        .order_by(PulseTimelineRow.cursor.desc())
+        .limit(limit)
+    )
     if before is not None:
         query = query.where(PulseTimelineRow.cursor < before)
     maximum = await session.scalar(select(func.max(PulseTimelineRow.cursor)))
     # Read the resume watermark first. A concurrent append can then be included
     # in the following page query without being skipped by a higher watermark.
-    rows = list(await session.scalars(query))
-    latest_cursor = max([maximum or 0, *(row.cursor for row in rows)])
+    rows = list(await session.execute(query))
+    latest_cursor = max([maximum or 0, *(timeline_row.cursor for timeline_row, _ in rows)])
     return {
         "items": [
             {
@@ -603,10 +740,11 @@ async def timeline(
                 "event_type": row.event_type,
                 "source": row.source,
                 "subject_id": row.subject_id,
-                "timestamp": row.occurred_at.isoformat(),
+                "timestamp": _iso_utc(row.occurred_at),
+                "observed_at": _iso_utc(observed_at),
                 "payload": row.payload,
             }
-            for row in rows
+            for row, observed_at in rows
         ],
         "latest_cursor": latest_cursor,
     }
@@ -664,13 +802,17 @@ async def websocket_endpoint(websocket: WebSocket, last_cursor: int | None = Non
                     )
                 else:
                     rows = list(
-                        await session.scalars(
-                            select(PulseTimelineRow)
+                        await session.execute(
+                            select(PulseTimelineRow, CanonicalEventRow.observed_at)
+                            .join(
+                                CanonicalEventRow,
+                                CanonicalEventRow.event_id == PulseTimelineRow.event_id,
+                            )
                             .where(PulseTimelineRow.cursor > last_cursor)
                             .order_by(PulseTimelineRow.cursor)
                         )
                     )
-                    for row in rows:
+                    for row, observed_at in rows:
                         await websocket.send_json(
                             {
                                 "type": "timeline.item",
@@ -678,7 +820,9 @@ async def websocket_endpoint(websocket: WebSocket, last_cursor: int | None = Non
                                 "event_id": str(row.event_id),
                                 "event_type": row.event_type,
                                 "source": row.source,
-                                "timestamp": row.occurred_at.isoformat(),
+                                "subject_id": row.subject_id,
+                                "timestamp": _iso_utc(row.occurred_at),
+                                "observed_at": _iso_utc(observed_at),
                                 "payload": row.payload,
                                 "replayed": True,
                             }

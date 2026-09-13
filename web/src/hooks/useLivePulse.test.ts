@@ -7,8 +7,6 @@ import type { LiveState } from '../types/livepulse'
 vi.mock('../lib/api', () => ({
   getLiveState: vi.fn(),
   getTimeline: vi.fn(),
-  resetDemo: vi.fn(),
-  startDemo: vi.fn(),
 }))
 
 class FakeWebSocket {
@@ -40,7 +38,7 @@ class FakeWebSocket {
   }
 }
 
-const state = (version: number, matchId = 'demo-1', updatedAt = `2026-09-12T20:00:${String(version).padStart(2, '0')}Z`): LiveState => ({
+const state = (version: number, matchId = 'match-1', updatedAt = `2026-09-12T20:00:${String(version).padStart(2, '0')}Z`): LiveState => ({
   attention: 70,
   focus: {
     score: 70,
@@ -77,7 +75,7 @@ describe('authoritative live-state merge', () => {
   })
 
   it('accepts a new active match even when its per-match version restarts', () => {
-    expect(mergeLiveState(state(4), state(1, 'demo-2', '2026-09-12T20:00:05Z')).match?.match_id).toBe('demo-2')
+    expect(mergeLiveState(state(4), state(1, 'match-2', '2026-09-12T20:00:05Z')).match?.match_id).toBe('match-2')
   })
 
   it('does not let a WebSocket projection for another match replace active state', () => {
@@ -118,7 +116,7 @@ describe('inactive-match realtime notifications', () => {
       cursor: 1,
       event_id: 'inactive-event',
       event_type: 'football.match.goal',
-      source: 'demo-football',
+      source: 'football',
       timestamp: inactive.updated_at,
       state: inactive.match,
       focus: inactive.focus,

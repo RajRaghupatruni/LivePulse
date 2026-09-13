@@ -44,7 +44,7 @@ def create_spotify_router(
         state: str | None = Query(default=None),
         code: str | None = Query(default=None),
         error: str | None = Query(default=None),
-    ) -> dict[str, object]:
+    ) -> RedirectResponse:
         # Uvicorn logs the request path when it sends the response. Strip the OAuth query
         # after FastAPI has parsed it so authorization codes never enter access logs.
         request.scope["query_string"] = b""
@@ -79,7 +79,7 @@ def create_spotify_router(
             "connected",
             configured=instance._configured(),
         )
-        return {"provider": "spotify", "connected": True}
+        return RedirectResponse("/?spotify=connected", status_code=303)
 
     @router.get("/connection", response_model=SpotifyConnectionStatus)
     async def connection_status() -> SpotifyConnectionStatus:

@@ -47,6 +47,37 @@ def test_personal_local_rejects_unsupported_hosts_and_origins(
     )
 
 
+def test_personal_local_allows_exact_loopback_http_and_websocket_origins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routes, "get_settings", lambda: Settings(_env_file=None))
+    client = TestClient(routes.app, base_url="http://127.0.0.1:8000")
+
+    response = client.get("/health/live", headers={"origin": "http://127.0.0.1:5173"})
+    assert response.status_code == 200
+
+    with client.websocket_connect(
+        "/ws",
+        headers={
+            "host": "127.0.0.1:8000",
+            "origin": "http://127.0.0.1:5173",
+        },
+    ):
+        pass
+
+
+def test_personal_local_websocket_rejects_untrusted_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routes, "get_settings", lambda: Settings(_env_file=None))
+    client = TestClient(routes.app, base_url="http://127.0.0.1")
+
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with client.websocket_connect("/ws", headers={"host": "192.168.1.25:8000"}):
+            pass
+    assert closed.value.code == 1008
+
+
 def test_personal_local_websocket_rejects_remote_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -55,6 +86,22 @@ def test_personal_local_websocket_rejects_remote_origin(
 
     with pytest.raises(WebSocketDisconnect) as closed:
         with client.websocket_connect("/ws", headers={"origin": "https://attacker.example"}):
+            pass
+    assert closed.value.code == 1008
+
+
+def test_personal_local_rejects_loopback_origins_on_unlisted_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routes, "get_settings", lambda: Settings(_env_file=None))
+    client = TestClient(routes.app, base_url="http://127.0.0.1:8000")
+
+    assert (
+        client.get("/health/live", headers={"origin": "http://127.0.0.1:5175"}).status_code
+        == 403
+    )
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with client.websocket_connect("/ws", headers={"origin": "http://127.0.0.1:5175"}):
             pass
     assert closed.value.code == 1008
 
@@ -148,6 +195,9 @@ def test_public_demo_state_and_timeline_read_only_the_isolated_demo_store(
             return None
 
         async def scalars(self, *_args: object) -> list[object]:
+            return []
+
+        async def execute(self, *_args: object) -> list[object]:
             return []
 
     async def demo_database_session():
