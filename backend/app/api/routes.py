@@ -37,6 +37,10 @@ from app.providers.base import PollContext
 from app.providers.football.models import FootballFixtureObservation
 from app.providers.football.routes import router as football_router
 from app.providers.football.source import FootballPollSource
+from app.providers.gmail.models import GmailSyncBatch
+from app.providers.gmail.oauth import encryption_key_configured, install_oauth_access_log_filter
+from app.providers.gmail.router import router as gmail_oauth_router
+from app.providers.gmail.sync import GmailSyncSource, ingest_gmail_observations
 from app.providers.github.events import GithubChange
 from app.providers.github.health import github_health
 from app.providers.github.reconcile import GithubReconciliationSource
@@ -87,6 +91,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
+    install_oauth_access_log_filter()
     report_component("demo_source", "healthy", "idle")
     settings = get_settings()
     github_health.initialize(settings)
@@ -101,6 +106,12 @@ async def lifespan(_app: FastAPI):
         provider_registry.register_poll_source(GithubReconciliationSource(settings))
     if is_spotify_configured(settings):
         provider_registry.register_poll_source(spotify_provider.poll_source)
+    if settings.provider_configuration()["gmail"] and encryption_key_configured(settings):
+        provider_registry.register_poll_source(GmailSyncSource(settings=settings))
+    elif settings.provider_configuration()["gmail"]:
+        provider_health.report(
+            "gmail", "degraded", "credential_encryption_unavailable", configured=True
+        )
     weather_source = build_weather_source(settings)
     if weather_source is not None:
         provider_registry.register_poll_source(weather_source)
@@ -162,6 +173,15 @@ async def lifespan(_app: FastAPI):
             if len(spotify_observations) != len(observations):
                 raise ValueError("Spotify source returned an unexpected observation type")
             await spotify_provider.event_sink.handle(provider, spotify_observations, context)
+        elif provider == "gmail":
+            gmail_observations = [
+                observation
+                for observation in observations
+                if isinstance(observation.content, GmailSyncBatch)
+            ]
+            if len(gmail_observations) != len(observations):
+                raise ValueError("Gmail source returned an unexpected observation type")
+            await ingest_gmail_observations(provider, gmail_observations, context)
         else:
             raise ValueError("no ingestion adapter is registered for this provider")
 
@@ -521,3 +541,4 @@ app.include_router(router)
 app.include_router(github_router)
 app.include_router(spotify_router)
 app.include_router(weather_router)
+app.include_router(gmail_oauth_router)
