@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -17,6 +18,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -31,7 +33,20 @@ from app.core.logging import configure_logging
 from app.domain.focus import focus_for_match
 from app.outbox.publisher import run_publisher
 from app.projections.projector import run_projector
+from app.providers.base import PollContext
+from app.providers.github.events import GithubChange
+from app.providers.github.health import github_health
+from app.providers.github.reconcile import GithubReconciliationSource
+from app.providers.github.router import router as github_router
+from app.providers.github.storage import persist_observations
+from app.providers.observations import Observation
+from app.providers.registry import ProviderRegistry
+from app.providers.scheduler import PollScheduler
 from app.providers.status import provider_health
+from app.providers.weather.router import router as weather_router
+from app.providers.weather.service import weather_state
+from app.providers.weather.source import WeatherObservation, build_weather_source
+from app.providers.weather.storage import persist_weather_observation
 from app.realtime.manager import realtime
 from app.simulator.comeback import activate_match, clear_demo_data, run_comeback
 from app.storage.database import SessionFactory, engine, get_session
@@ -66,12 +81,59 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 async def lifespan(_app: FastAPI):
     configure_logging()
     report_component("demo_source", "healthy", "idle")
+    settings = get_settings()
+    github_health.initialize(settings)
+    provider_registry = ProviderRegistry()
+    if github_health.reconciliation_configured(settings):
+        provider_registry.register_poll_source(GithubReconciliationSource(settings))
+    weather_source = build_weather_source(settings)
+    if weather_source is not None:
+        provider_registry.register_poll_source(weather_source)
+
+    async def persist_provider_observations(
+        provider: str,
+        observations: Sequence[Observation[BaseModel]],
+        context: PollContext,
+    ) -> None:
+        if provider == "github":
+            github_observations = [
+                observation
+                for observation in observations
+                if isinstance(observation.content, GithubChange)
+            ]
+            try:
+                await persist_observations(
+                    github_observations, correlation_id=context.correlation_id
+                )
+            except Exception:
+                github_health.note_reconciliation_failure("event_persist_failed")
+                raise
+        elif provider == "weather":
+            for observation in observations:
+                if isinstance(observation.content, WeatherObservation):
+                    try:
+                        await persist_weather_observation(
+                            observation.content,
+                            observed_at=observation.observed_at,
+                            correlation_id=context.correlation_id,
+                        )
+                    except Exception:
+                        weather_state.record_failure("event_persist_failed")
+                        raise
+
     tasks: list[asyncio.Task[None]] = []
-    if get_settings().run_background_services:
+    if settings.run_background_services:
         tasks = [
             asyncio.create_task(run_publisher(), name="outbox-publisher"),
             asyncio.create_task(run_projector(), name="event-projector"),
         ]
+        if provider_registry.poll_sources:
+            scheduler = PollScheduler(
+                provider_registry.poll_sources,
+                observation_handler=persist_provider_observations,
+                max_concurrency=2,
+            )
+            tasks.append(asyncio.create_task(scheduler.run(), name="provider-poll-scheduler"))
     yield
     global scenario_task
     if scenario_task is not None and not scenario_task.done():
@@ -397,3 +459,5 @@ async def websocket_endpoint(websocket: WebSocket, last_cursor: int | None = Non
 
 
 app.include_router(router)
+app.include_router(github_router)
+app.include_router(weather_router)
