@@ -4,28 +4,28 @@ This document is the locked product direction and source of truth. Milestone imp
 
 ## Product thesis
 
-LivePulse is a single-user personal realtime command center intended to stay open on a second monitor all day. Its core is a Python realtime event platform: ingest heterogeneous external state, normalize observations into immutable canonical events, durably persist them, publish them through a durable event stream, process them with idempotent consumers, maintain authoritative projections, expose a unified timeline, and push recoverable realtime updates to the browser. It is designed for observability, failure handling, replay, and evidence-backed testing.
+LivePulse is a single-user personal realtime command center intended to stay open in a local fullscreen desktop application. The current React frontend runs in a local browser for development and fallback, and is structured for a later local desktop shell without importing shell APIs into UI components. Its core is a Python realtime event platform: ingest heterogeneous external state, normalize observations into immutable canonical events, durably persist them, publish them through a durable event stream, process them with idempotent consumers, maintain authoritative projections, expose a unified timeline, and push recoverable realtime updates to the UI. It is designed for observability, failure handling, replay, and evidence-backed testing.
 
 ## Locked product direction (P0)
 
 | Requirement | Status |
 |---|---|
-| Unified Pulse Timeline across product domains | **Implemented in M3 backend** for football, Spotify, GitHub, Gmail, and weather through one durable timeline-only path for non-football events; current UI remains a generic timeline |
+| Unified Pulse Timeline across product domains | **Implemented** for football, Spotify, GitHub, Gmail, and weather through one durable timeline; final React UI provides domain-aware chronology, safe details, freshness and cursor history |
 | Football: EPL, La Liga, Bundesliga, Ligue 1, EFL Championship, Champions League, Europa League, FA Cup, Carabao Cup, Serie A, MLS | **Implemented in M3** with API-Football polling, canonical/outbox events, authoritative football projection, quota-aware cadence, and seven-day upcoming horizon |
 | Spotify current playback and controls | **Implemented in M3 backend** with OAuth, encrypted credentials, playback polling, playback/device endpoints, and typed commands; requires local credentials and an authorized Premium account |
 | Exactly five monitored GitHub repositories initially: Strata, Tandem, OptiScale, LivePulse, Portfolio | **Implemented in M3 backend** with HMAC-validated webhooks, delivery dedupe, and bounded REST reconciliation; requires an owner, webhook secret and/or token |
 | Read-only Gmail | **Implemented in M3 backend** with `gmail.readonly`, encrypted credentials, bounded metadata sync, and transactional history checkpoints; requires Google OAuth setup |
 | Weather | **Implemented in M3 backend** with Open-Meteo current/daily conditions and meaningful-change events; requires local coordinates/timezone and no API key |
 | Persistent live local date/time/day | **Implemented in M1 UI** |
-| Deterministic Focus Engine | **Implemented in M2**; normalized backend-owned focus contract with deterministic football attention, transient event expiry, and persistent lifecycle state; other source priorities remain future work |
-| Adaptive command-center UI | **Implemented in M2 foundation**; focus-led desktop shell driven by backend state; future provider surfaces remain absent until implemented |
-| Match Mode | **Implemented in M2**; match lifecycle derives Match Mode from backend focus state |
+| Deterministic Focus Engine | **Implemented**; football `FocusState` remains authoritative, and ADR 0012 adds server-selected cross-domain `dominant_focus` for important Gmail, CI failures, and provider degradation |
+| Adaptive command-center UI | **Implemented in final UI milestone**; provider-backed, reference-led landscape/portrait compositions, state-aware surfaces, and a shell-agnostic platform boundary ready for a later local desktop shell |
+| Match Mode | **Implemented**; authoritative match lifecycle drives the main operating stage, with upcoming, live, halftime, event, and full-time transitions |
 | Provider and system health visibility | **Implemented in M3** for local components and registered providers, with disconnected/unconfigured, connecting, healthy, stale, rate-limited/degraded, auth-failure, provider-failure, and resyncing states where evidence supports them |
 | Full ChatGPT-style chat using GPT-5.6 Luna | **Not implemented** |
 | Streaming AI responses | **Not implemented** |
 | OpenAI web search for freshness-dependent questions | **Not implemented** |
 | LivePulse-aware AI tools | **Not implemented** |
-| Command bar for data queries, commands, and general AI questions | **Implemented in M2 foundation**; explicit local command registry for demo/reset/health/match/close. Data queries and general AI questions remain future work |
+| Command bar for data queries, commands, and general AI questions | **Implemented as a local command palette** for navigation, timer actions, health, and explicit external launch destinations. Data queries and general AI questions remain future work |
 | WebSocket reconnect/resynchronization | **Implemented in M1 foundation**; reconnect/refetch and cursor-gap signal |
 | Security/threat model | **Implemented for the locked single-user/local-first thesis** — PERSONAL_LOCAL loopback trust boundary, explicit PUBLIC_DEMO isolation, provider controls, deterministic retention, and confirmed local deletion; conventional account authentication is intentionally not part of this product |
 | Structured logging | **Implemented in M1 foundation** |
@@ -49,6 +49,14 @@ These implementation requirements remain locked. Backend integration paths are i
 - **AI:** M4 only. GPT-5.6 Luna chat, streaming, web search, and LivePulse-aware tools remain not implemented in M3.
 
 All provider observations normalize to immutable canonical events and share the transactional event/outbox, Redpanda, idempotent projector, durable Pulse Timeline, and replay path. Football events alone mutate football match state. Provider-specific DTOs stay inside adapters and do not enter canonical or frontend contracts. M3 adds no provider-specific UI.
+
+## Final UI milestone and local desktop target
+
+The final React UI runs locally for `PERSONAL_LOCAL` with real provider-backed data. The delivery target is a local desktop application, likely packaged with Tauri v2 in a separate milestone. Until then, the browser development/fallback surface targets fullscreen landscape at 1440×900, 1600×900 and 1920×1080, plus the locked 1080×1920 portrait composition. The operating environment integrates System Pulse, clock/weather, football Match Mode, the universal Pulse Timeline, read-only Gmail, Spotify, Focus Timer, Quick Launch and the CSS/SVG Pulse Field. Provider surfaces remain truthful and useful when optional credentials are absent; startup, backend readiness, reconnecting, and recovery are visible without requiring a manually started backend to have succeeded.
+
+`web/src/lib/platform.ts` centralizes external launch, fullscreen, authorization entry, preferences, backend lifecycle observations, and local transport behind an injected platform interface. Browser development supplies the fallback implementations. A later desktop packaging milestone will provide native opening/fullscreen, window placement/restoration, shell-backed preference storage, sidecar lifecycle, and packaged assets. This milestone adds no Tauri/Rust code, native plugins/capabilities, embedded ChatGPT, or desktop packaging.
+
+The final UI does not present PUBLIC_DEMO labels, fixtures, controls, or state-specific visuals. M3 PUBLIC_DEMO isolation remains part of backend security and is unchanged. Development-only visual calibration fixtures are dynamically loaded only by Vite development and do not replace provider behavior in production. The UI does not add AI, a ChatGPT API connection, unsupported provider capabilities, or fabricated telemetry.
 
 The normalized provider-observation contract is an adapter boundary before canonical domain events. Polling, webhook verification/normalization, and commands are separate capabilities; no provider is required to implement all of them.
 

@@ -1,16 +1,19 @@
 """Modular browser-facing Google OAuth routes; token material stays server-side."""
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
 
-from app.core.config import get_settings
+from app.core.config import RuntimeMode, get_settings
+from app.providers.gmail.client import GmailApiError
+from app.providers.gmail.models import GmailMessageMetadata
 from app.providers.gmail.oauth import (
     GoogleOAuth,
     OAuthError,
     install_oauth_access_log_filter,
 )
+from app.providers.gmail.service import GmailReadOnlyService
 from app.providers.status import provider_health
 from app.storage.database import SessionFactory
 from app.storage.models import ProviderCheckpointRow, ProviderConnectionRow
@@ -43,6 +46,68 @@ async def disconnect_gmail() -> dict[str, object]:
         "status": "disconnected",
         "detail_code": "locally_disconnected",
     }
+
+
+@connection_router.get("/messages")
+async def recent_messages(limit: int = Query(default=4, ge=1, le=20)) -> dict[str, object]:
+    """Return a small read-only inbox view with safe metadata only."""
+    settings = get_settings()
+    if settings.runtime_mode is not RuntimeMode.PERSONAL_LOCAL:
+        return {"status": "not_configured", "configured": False, "messages": []}
+    if not settings.provider_configuration()["gmail"]:
+        return {"status": "not_configured", "configured": False, "messages": []}
+
+    async with SessionFactory() as session:
+        connection = await session.scalar(
+            select(ProviderConnectionRow).where(ProviderConnectionRow.provider == "gmail")
+        )
+        connected = connection is not None and connection.status == "connected"
+    if not connected:
+        return {"status": "disconnected", "configured": True, "messages": []}
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as http:
+            service = GmailReadOnlyService.create(
+                settings=settings, session_factory=SessionFactory, http=http
+            )
+            messages = await service.get_recent_messages(limit=limit)
+    except OAuthError:
+        return {"status": "disconnected", "configured": True, "messages": []}
+    except (GmailApiError, httpx.HTTPError):
+        return {"status": "unavailable", "configured": True, "messages": []}
+    return {
+        "status": "ready",
+        "configured": True,
+        "messages": [_message_payload(message) for message in messages],
+    }
+
+
+@connection_router.get("/messages/{message_id}")
+async def message_metadata(message_id: str) -> dict[str, object]:
+    """Return metadata for one message; the dashboard never fetches message bodies."""
+    settings = get_settings()
+    if (
+        settings.runtime_mode is not RuntimeMode.PERSONAL_LOCAL
+        or not settings.provider_configuration()["gmail"]
+    ):
+        raise HTTPException(status_code=404, detail="message_not_found")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as http:
+            service = GmailReadOnlyService.create(
+                settings=settings, session_factory=SessionFactory, http=http
+            )
+            message = await service.get_message_metadata(message_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="message_not_found") from exc
+    except OAuthError as exc:
+        raise HTTPException(status_code=503, detail=exc.detail_code) from exc
+    except (GmailApiError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=503, detail="gmail_unavailable") from exc
+    return _message_payload(message)
+
+
+def _message_payload(message: GmailMessageMetadata) -> dict[str, object]:
+    return message.model_dump(mode="json")
 
 
 @router.get("/start", include_in_schema=False)
@@ -79,7 +144,7 @@ async def oauth_callback(request: Request) -> RedirectResponse:
         except OAuthError as exc:
             raise _http_error(exc) from exc
     provider_health.report("gmail", "degraded", "initial_sync_pending", configured=True)
-    return RedirectResponse("/api/v1/providers/gmail/oauth/complete", status_code=303)
+    return RedirectResponse("/?gmail=connected", status_code=303)
 
 
 @router.get("/complete", include_in_schema=False)

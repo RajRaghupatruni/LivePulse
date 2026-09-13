@@ -1,10 +1,13 @@
 """Host and browser-origin boundary for the single-user local runtime."""
 
+import logging
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
 from app.core.config import RuntimeMode, Settings
+
+log = logging.getLogger(__name__)
 
 
 class TrustedBoundaryMiddleware:
@@ -26,12 +29,38 @@ class TrustedBoundaryMiddleware:
         origin = origin_value.decode("latin-1") if origin_value else None
 
         if not self._trusted_host(host, settings):
+            log.warning(
+                "trusted boundary rejected request",
+                extra={
+                    "reason_code": "untrusted_host",
+                    "request_type": scope.get("type"),
+                    "host": host,
+                },
+            )
             await self._reject(scope, send, status=400, code="untrusted_host")
             return
         if origin is not None and not self._trusted_origin(origin, settings):
+            log.warning(
+                "trusted boundary rejected request",
+                extra={
+                    "reason_code": "untrusted_origin",
+                    "request_type": scope.get("type"),
+                    "host": host,
+                    "origin": origin,
+                },
+            )
             await self._reject(scope, send, status=403, code="untrusted_origin")
             return
         if settings.runtime_mode is RuntimeMode.PUBLIC_DEMO and self._private_provider_path(scope):
+            log.warning(
+                "trusted boundary rejected request",
+                extra={
+                    "reason_code": "not_found",
+                    "request_type": scope.get("type"),
+                    "host": host,
+                    "path": scope.get("path", ""),
+                },
+            )
             await self._reject(scope, send, status=404, code="not_found")
             return
         await self.app(scope, receive, send)
@@ -54,7 +83,7 @@ class TrustedBoundaryMiddleware:
         if settings.runtime_mode is RuntimeMode.PERSONAL_LOCAL:
             if parsed[1] not in {"localhost", "127.0.0.1", "::1"}:
                 return False
-        return parsed[0] in {_parse_origin(value) for value in settings.allowed_origins}
+        return parsed in {_parse_origin(value) for value in settings.allowed_origins}
 
     @staticmethod
     def _private_provider_path(scope: dict[str, Any]) -> bool:

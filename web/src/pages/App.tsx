@@ -1,131 +1,178 @@
-import { useEffect, useState } from 'react'
-import { Activity, ArrowDownRight, Layers3, Plus, RotateCcw } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useReducedMotion } from 'framer-motion'
-import { CommandBar } from '../components/CommandBar'
-import { ConnectionBadge } from '../components/ConnectionBadge'
-import { SystemHealthPanel } from '../components/SystemHealthPanel'
-import { MatchSurface } from '../features/match/MatchSurface'
+import { Activity, Focus, Home, Radio, Settings2, Waves } from 'lucide-react'
+import { AmbientHeader } from '../features/environment/AmbientHeader'
+import { SpatialEnvironment } from '../features/environment/SpatialEnvironment'
+import { FocusTimer } from '../features/focus/FocusTimer'
+import { useFocusTimerSnapshot } from '../features/focus/focusTimerStore'
+import { MatchStage } from '../features/match/MatchStage'
+import { SpotifyCapsule } from '../features/music/SpotifyCapsule'
 import { PulseTimeline } from '../features/timeline/PulseTimeline'
+import { CommandPalette, QuickLaunch, type AppView } from '../features/command/QuickLaunch'
+import { GmailPanel } from '../features/mail/GmailPanel'
+import { LaunchDestinationSettings } from '../features/command/LaunchDestinationSettings'
 import { useLivePulse } from '../hooks/useLivePulse'
+import { useProviderSurfaces } from '../hooks/useProviderSurfaces'
 import { useSystemHealth } from '../hooks/useSystemHealth'
-import type { HealthStatus } from '../types/livepulse'
+import { consumeWakeSequence, requestFullscreen } from '../lib/platform'
+import type { VisualFixture, VisualFixtureName } from '../dev/visualFixtures'
 
-function useLocalClock() {
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-  return now
-}
+const navigation: Array<{ id: AppView; label: string; icon: typeof Home }> = [
+  { id: 'home', label: 'Home', icon: Home },
+  { id: 'timeline', label: 'Timeline', icon: Activity },
+  { id: 'focus', label: 'Focus', icon: Focus },
+  { id: 'settings', label: 'Settings', icon: Settings2 },
+]
 
-const railItems = [
-  ['postgres', 'STORE'],
-  ['redpanda', 'EVENT STREAM'],
-  ['outbox_publisher', 'OUTBOX'],
-  ['projector', 'PROJECTOR'],
-] as const
-
-function SystemRail({ health }: { health: ReturnType<typeof useSystemHealth>['health'] }) {
-  return (
-    <section className="system-rail" aria-label="Observed system components">
-      <div className="rail-heading"><Activity size={14} /><span>PERIPHERAL STATUS</span></div>
-      {railItems.map(([key, label]) => {
-        const component = health?.components[key]
-        const status: HealthStatus = component?.status ?? 'unknown'
-        return (
-          <div className={`rail-item status-${status}`} key={key} aria-label={`${label}: ${status}`}>
-            <span className="rail-state-mark" aria-hidden="true" />
-            <span>{label}</span>
-            <strong>{status === 'healthy' ? 'READY' : status.toUpperCase()}</strong>
-          </div>
-        )
-      })}
-      <span className="rail-note"><Layers3 size={12} /> LOCAL DEMO STACK</span>
-    </section>
-  )
+function localDayPhase() {
+  const hour = new Date().getHours()
+  if (hour >= 6 && hour < 10) return 'dawn'
+  if (hour >= 10 && hour < 17) return 'day'
+  if (hour >= 17 && hour < 20) return 'dusk'
+  return 'night'
 }
 
 export default function App() {
-  const { live, timeline, connection, busy, error, runDemo, reset } = useLivePulse()
-  const { health, requestState } = useSystemHealth()
-  const [healthOpen, setHealthOpen] = useState(false)
-  const now = useLocalClock()
-  const reduceMotion = useReducedMotion()
-  const matchMode = live.focus.match_mode.replaceAll('_', ' ').toUpperCase()
+  const { live, timeline, connection, eventArrival, loadOlder, hasOlder, loadingOlder, refresh } = useLivePulse()
+  const { health, requestState, refresh: refreshHealth } = useSystemHealth()
+  const surfaces = useProviderSurfaces(health?.runtime_mode === 'PERSONAL_LOCAL')
+  const timer = useFocusTimerSnapshot()
+  const reducedMotion = useReducedMotion()
+  const [view, setView] = useState<AppView>('home')
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [timelineHistory, setTimelineHistory] = useState(false)
+  const [gmailExpanded, setGmailExpanded] = useState(false)
+  const [wake, setWake] = useState(consumeWakeSequence)
+  const [dayPhase, setDayPhase] = useState(localDayPhase)
+  const [visualName, setVisualName] = useState<'real' | VisualFixtureName>('real')
+  const [visualFixture, setVisualFixture] = useState<VisualFixture | null>(null)
 
-  const showMatch = () => {
-    document.getElementById('focus-surface')?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' })
+  const applyVisualFixture = useCallback(async (name: 'real' | VisualFixtureName) => {
+    setVisualName(name)
+    if (!import.meta.env.DEV || name === 'real') { setVisualFixture(null); return }
+    const { createVisualFixture } = await import('../dev/visualFixtures')
+    setVisualFixture(createVisualFixture(name))
+  }, [])
+
+  useEffect(() => {
+    const updatePeriod = window.setInterval(() => setDayPhase(localDayPhase()), 60_000)
+    return () => window.clearInterval(updatePeriod)
+  }, [])
+  useEffect(() => {
+    if (!wake) return
+    const timeout = window.setTimeout(() => setWake(false), 1950)
+    return () => window.clearTimeout(timeout)
+  }, [wake])
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const requested = new URLSearchParams(window.location.search).get('visual') as VisualFixtureName | null
+    if (requested && ['idle', 'spotify-playing', 'upcoming', 'live', 'goal', 'degraded', 'focus'].includes(requested)) void applyVisualFixture(requested)
+  }, [applyVisualFixture])
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPaletteOpen((value) => !value)
+      }
+      if (event.key === 'Escape') {
+        setTimelineHistory(false)
+        setGmailExpanded(false)
+        setPaletteOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [])
+
+  const shownLive = visualFixture?.live ?? live
+  const shownTimeline = visualFixture?.timeline ?? timeline
+  const shownConnection = visualFixture?.connection ?? connection
+  const shownEventArrival = visualFixture?.eventArrival ?? eventArrival
+  const shownHealth = visualFixture?.health ?? health
+  const shownSurfaces = {
+    football: visualFixture?.football ?? surfaces.football,
+    spotify: visualFixture?.spotify ?? surfaces.spotify,
+    weather: visualFixture?.weather ?? surfaces.weather,
+    gmail: visualFixture?.gmail,
+  }
+  const visibleTimer = visualFixture?.focusTimer ?? timer
+  const focused = visibleTimer.status === 'running' || visibleTimer.status === 'paused'
+  const focusLabel = focused ? `FOCUS SESSION · ${visibleTimer.durationMinutes} MIN · ${visibleTimer.status.toUpperCase()}` : null
+  const weather = shownSurfaces.weather.value?.current
+  const fixtureSet = shownSurfaces.football.value
+  const hasUpcoming = [...(fixtureSet?.today ?? []), ...(fixtureSet?.upcoming ?? [])].some((fixture) => Date.parse(fixture.kickoff_at) > Date.now())
+  const matchMode = shownLive.match && ['live', 'halftime'].includes(shownLive.match.status) ? shownLive.focus.match_mode
+    : fixtureSet?.live.length ? 'live' : hasUpcoming ? 'scheduled' : shownLive.match?.status === 'fulltime' ? 'fulltime' : shownLive.focus.match_mode
+  const degraded = shownHealth?.status === 'degraded' || shownConnection === 'DEGRADED'
+  const dominantPriority = shownLive.dominant_focus?.priority ?? shownLive.focus.score
+  const timelineItems = timelineHistory || view === 'timeline' ? shownTimeline : shownTimeline.slice(0, 6)
+  const environmentalState = useMemo(() => ({
+    mode: matchMode,
+    degraded,
+    focused,
+    attention: dominantPriority,
+    connection: shownConnection,
+    eventType: shownEventArrival?.event_type ?? null,
+    weather: weather?.category ?? '',
+    spotifyPlaying: shownSurfaces.spotify.value?.playback?.is_playing ?? false,
+  }), [matchMode, degraded, focused, dominantPriority, shownConnection, shownEventArrival?.event_type, weather?.category, shownSurfaces.spotify.value?.playback?.is_playing])
+
+  const navigate = (next: AppView) => {
+    setGmailExpanded(false)
+    setView(next)
+    if (next === 'settings') window.dispatchEvent(new Event('livepulse:open-health'))
+  }
+  const showMatch = () => { navigate('home'); requestAnimationFrame(() => document.querySelector('.match-stage')?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' })) }
+  const showGmail = () => { navigate('home'); setGmailExpanded(true); requestAnimationFrame(() => document.querySelector('#gmail')?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' })) }
+  const showHealth = () => { navigate('settings'); window.dispatchEvent(new Event('livepulse:open-health')) }
+  const moveMatch = (direction: 'next' | 'previous') => {
+    if (view !== 'home') navigate('home')
+    window.setTimeout(() => window.dispatchEvent(new Event(`livepulse:match-${direction}`)), 0)
   }
 
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="#top" aria-label="LivePulse home">
-          <span className="brand-symbol" aria-hidden="true"><i /><i /><i /></span>
-          <span>LIVE<span className="brand-light">PULSE</span></span>
-        </a>
-        <div className="topbar-center"><span className="system-mark"><Layers3 size={14} /> PERSONAL COMMAND CENTER</span><span className="topbar-line" /></div>
-        <div className="topbar-right">
-          <div className="local-clock" aria-label={`Local time ${now.toLocaleString()}`}>
-            <span>{now.toLocaleDateString([], { weekday: 'short', month: 'short', day: '2-digit', year: 'numeric' }).toUpperCase()}</span>
-            <strong>{now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</strong>
-          </div>
-          <SystemHealthPanel
-            health={health}
-            requestState={requestState}
-            open={healthOpen}
-            onToggle={() => setHealthOpen((value) => !value)}
-          />
-          <ConnectionBadge state={connection} />
-        </div>
-      </header>
-
-      <div className="workspace" id="top">
-        <section className="workspace-heading">
-          <div>
-            <span className="eyebrow"><span className="eyebrow-index">LIVEPULSE / 02</span> PERSONAL REALTIME SYSTEM</span>
-            <h1>Today, <em>in focus.</em></h1>
-            <p>A clear view of what is happening now, with the history to catch up.</p>
-          </div>
-          <div className="workspace-heading-meta">
-            <span className="eyebrow">MATCH MODE</span>
-            <strong className={`mode-chip mode-${live.focus.match_mode}`}>{matchMode}</strong>
-            <small>{live.focus.reason.replaceAll('_', ' ')}</small>
-          </div>
+  return <main className={`livepulse-app${wake ? ' is-waking' : ''}${focused ? ' is-focused' : ''}`} data-match-mode={matchMode} data-view={view} data-time-of-day={dayPhase} data-backend-state={requestState}>
+    <SpatialEnvironment {...environmentalState} reducedMotion={Boolean(reducedMotion)} timeOfDay={dayPhase} />
+    <div className="app-shell">
+      <nav className="navigation-rail" aria-label="Main navigation">
+        <button className="nav-brand-mark" type="button" aria-label="LivePulse home" onClick={() => navigate('home')}><Waves size={22} aria-hidden="true" /></button>
+        <div className="nav-items">{navigation.map(({ id, label, icon: Icon }) => <button className={`nav-item${view === id ? ' is-active' : ''}`} type="button" key={id} aria-label={label} aria-current={view === id ? 'page' : undefined} onClick={() => navigate(id)}><Icon size={19} strokeWidth={1.7} aria-hidden="true" /><span>{label}</span></button>)}</div>
+        <span className="nav-rail-bottom" aria-hidden="true"><i /></span>
+      </nav>
+      <div className="app-content" id="workspace">
+        <AmbientHeader health={shownHealth} requestState={requestState} connection={shownConnection} weather={shownSurfaces.weather} onToggleFullscreen={() => void requestFullscreen()} />
+        <section className="workspace-intro" aria-label="LivePulse status">
+          <div className="intro-copy"><span className="intro-eyebrow"><span className="intro-pulse" />{focusLabel ?? (shownLive.dominant_focus ? `CURRENT SIGNAL · ${shownLive.dominant_focus.domain.toUpperCase()}` : 'PERSONAL OPERATIONS')}</span></div>
+          <div className="intro-right"><strong><Radio size={15} aria-hidden="true" />{shownConnection === 'LIVE' ? 'Realtime connected' : shownConnection === 'RESYNCING' ? 'Reconciling recent state' : shownConnection === 'RECONNECTING' ? 'Realtime reconnecting' : shownConnection === 'DEGRADED' ? 'Realtime unavailable' : 'Establishing realtime'}</strong></div>
         </section>
 
-        <div className="signal-row"><span className="section-label"><Activity size={13} /> CURRENT SIGNAL</span><span className="signal-rule" /><span className="signal-end">FOCUS {String(live.focus.score).padStart(2, '0')} / 100</span></div>
-
-        <div className="content-grid">
-          <div className="primary-column">
-            <section id="focus-surface" className="focus-section" aria-label="Current focus">
-              <div className="surface-heading"><div><span className="eyebrow">01 / FOCUS SURFACE</span><h2>{live.match ? 'The match, as it is now.' : 'A clear field of view.'}</h2></div><span className="focus-source">{live.focus.source.toUpperCase()} · {live.focus.transient ? 'TRANSIENT ATTENTION' : 'DETERMINISTIC FOCUS'}</span></div>
-              <MatchSurface match={live.match} focus={live.focus} />
-              <div className="demo-controls">
-                <div className="demo-caption"><span className="demo-mark" /><span>LOCAL DETERMINISTIC SOURCE</span></div>
-                <div className="demo-actions">
-                  <button className="button-secondary" type="button" onClick={() => void reset()} disabled={busy}><RotateCcw size={14} /> Reset</button>
-                  <button className="button-primary" type="button" onClick={() => void runDemo()} disabled={busy}><Plus size={15} /> {busy ? 'Working…' : 'Run Demo Match'} <ArrowDownRight size={14} /></button>
-                </div>
-              </div>
-              {error && <div className="error-banner" role="alert">{error}</div>}
-            </section>
-            <SystemRail health={health} />
+        {view === 'home' && <section className="dashboard-composition" aria-label="LivePulse overview">
+          <div className="dashboard-main-row">
+            <MatchStage live={shownLive} fixtures={fixtureSet} fixtureLoading={shownSurfaces.football.loading} fixtureAvailable={shownSurfaces.football.available} timeline={shownTimeline} eventArrival={shownEventArrival} />
+            <div className="inbox-focus-rail">
+              <GmailPanel provider={shownHealth?.providers?.gmail} expanded={gmailExpanded} showAll={gmailExpanded} onViewAll={() => setGmailExpanded((value) => !value)} onCloseAll={() => setGmailExpanded(false)} snapshotOverride={shownSurfaces.gmail} />
+              <FocusTimer snapshotOverride={visualFixture?.focusTimer} />
+            </div>
+            <aside className="timeline-environment" aria-label="Recent signals">
+              <div className="surface-heading timeline-heading"><span className="surface-icon timeline-icon"><Activity size={16} aria-hidden="true" /></span><div><span className="surface-overline">EVENT CHRONOLOGY</span><h2>Recent signals</h2></div><span className={`timeline-live timeline-${shownConnection.toLowerCase()}`}><i />{shownConnection === 'LIVE' ? 'LIVE' : shownConnection}</span></div>
+              <PulseTimeline items={timelineItems} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => { setTimelineHistory(true); void loadOlder() }} onRefresh={() => { void refresh() }} />
+              <button className="panel-view-all" type="button" onClick={() => { setTimelineHistory(true); navigate('timeline') }}>View all signals <span>→</span></button>
+            </aside>
           </div>
-          <PulseTimeline items={timeline} />
-        </div>
+          <div className="dashboard-lower-row">
+            <SpotifyCapsule snapshot={shownSurfaces.spotify} provider={shownHealth?.providers?.spotify} />
+            <QuickLaunch onOpen={() => setPaletteOpen(true)} onGoHome={() => navigate('home')} onConfigure={() => navigate('settings')} />
+          </div>
+        </section>}
 
-        <footer className="footer-row">
-          <CommandBar
-            onRunDemo={runDemo}
-            onReset={reset}
-            onShowHealth={() => setHealthOpen(true)}
-            onShowMatch={showMatch}
-          />
-          <div className="footer-meta"><span><i aria-hidden="true" /> M2 · STATE-DRIVEN</span><span>LOCAL SYSTEM TIME</span></div>
-        </footer>
+        {view === 'timeline' && <section className="page-surface timeline-page"><header className="page-title"><span className="surface-overline">UNIVERSAL EVENT HISTORY</span><h2>Pulse Timeline</h2><p>Provider events arranged by observed time, with source and freshness preserved.</p></header><PulseTimeline items={shownTimeline} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => void loadOlder()} onRefresh={() => { void refresh() }} /></section>}
+
+        {view === 'focus' && <section className="page-surface focus-page"><header className="page-title"><span className="surface-overline">ATTENTION POSTURE</span><h2>Focus</h2><p>A deterministic quiet window. Critical match events and system alerts continue to surface.</p></header><FocusTimer snapshotOverride={visualFixture?.focusTimer} /><div className="focus-principles"><span><i /> Peripheral surfaces recede</span><span><i /> Critical events remain visible</span><span><i /> Spotify controls stay available</span></div><button className="text-action" type="button" onClick={() => navigate('home')}>Return to Home →</button></section>}
+
+        {view === 'settings' && <section className="page-surface settings-page"><header className="page-title"><span className="surface-overline">LOCAL RUNTIME</span><h2>System & providers</h2><p>LivePulse runs against the local backend. Provider freshness is reported from observed state.</p></header><div className="settings-toolbar"><span className={`backend-indicator backend-${requestState}`}><i />{requestState === 'available' ? 'Backend ready' : requestState === 'checking' || requestState === 'starting' ? 'Backend starting' : 'Backend unavailable'}</span><button className="text-action" type="button" onClick={() => void refreshHealth()}>Check again <span>↻</span></button><button className="text-action" type="button" onClick={() => void requestFullscreen()}>Toggle fullscreen <span>⛶</span></button></div><div className="settings-grid"><GmailPanel provider={shownHealth?.providers?.gmail} expanded showAll={gmailExpanded} snapshotOverride={shownSurfaces.gmail} onViewAll={() => setGmailExpanded((value) => !value)} onCloseAll={() => setGmailExpanded(false)} /><LaunchDestinationSettings /></div><p className="settings-note">OAuth credentials remain in the local backend. Gmail dashboard reads return bounded metadata only; message bodies are not stored.</p></section>}
+
+        <footer className="environment-footer"><span className="footer-signature"><i /> LIVEPULSE <span>PERSONAL LOCAL</span></span><span className="footer-hint">LOCAL BACKEND · REALTIME {shownConnection}</span>{import.meta.env.DEV && <label className="visual-fixture-select">VISUAL CALIBRATION<select value={visualName} onChange={(event) => void applyVisualFixture(event.target.value as 'real' | VisualFixtureName)} aria-label="Select development visual state"><option value="real">Real provider state</option><option value="idle">Normal / idle</option><option value="spotify-playing">Spotify playing</option><option value="upcoming">Upcoming match</option><option value="live">Live match</option><option value="goal">Goal event</option><option value="degraded">Provider degraded</option><option value="focus">Focus timer active</option></select></label>}<button className="footer-health" type="button" onClick={showHealth}><span className={`footer-health-mark health-${shownHealth?.status ?? requestState}`} />System Pulse</button></footer>
       </div>
-    </main>
-  )
+    </div>
+    {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onNavigate={navigate} onOpenGmail={showGmail} onShowMatch={showMatch} onShowHealth={showHealth} onNextMatch={() => moveMatch('next')} onPreviousMatch={() => moveMatch('previous')} />}
+  </main>
 }

@@ -1,19 +1,48 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { PulseTimeline } from './PulseTimeline'
 
 describe('PulseTimeline', () => {
-  it('renders event history and empty state', () => {
+  it('distinguishes a material event and reveals safe chronology metadata on demand', () => {
     const item = {
-      cursor: 1, event_id: 'evt-1', event_type: 'football.match.goal', source: 'demo-football', subject_id: 'demo-1',
-      timestamp: '2026-09-12T20:00:00Z', payload: { side: 'home', home_team: 'Northstar FC', player: 'M. Vale', minute: 28 },
+      cursor: 1, event_id: 'evt-1', event_type: 'football.match.goal', source: 'football', subject_id: 'match-1',
+      timestamp: '2026-09-12T20:00:00Z', observed_at: '2026-09-12T20:00:01Z',
+      payload: { side: 'home', home_team: 'Northstar FC', player: 'M. Vale', minute: 28 },
     }
-    const { rerender } = render(<PulseTimeline items={[]} />)
-    expect(screen.getByText('Your signal, in sequence.')).toBeInTheDocument()
-    rerender(<PulseTimeline items={[item]} />)
+    render(<PulseTimeline items={[item]} />)
     expect(screen.getByText('Goal')).toBeInTheDocument()
     expect(screen.getByText('M. Vale · Northstar FC')).toBeInTheDocument()
-    expect(screen.getByText('Demo Football')).toBeInTheDocument()
-    expect(screen.getByText('28′')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Goal/ }))
+    expect(screen.getByText('football')).toBeInTheDocument()
+    expect(screen.getByText('Observed')).toBeInTheDocument()
+  })
+
+  it('keeps an explicit empty state and offers cursor history when available', () => {
+    const onLoadOlder = vi.fn()
+    render(<PulseTimeline items={[]} hasOlder onLoadOlder={onLoadOlder} />)
+    expect(screen.getByText('Timeline establishing')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Load earlier events/ }))
+    expect(onLoadOlder).toHaveBeenCalledOnce()
+  })
+
+  it('moves among timeline rows with the arrow and boundary keys', () => {
+    const items = ['one', 'two', 'three'].map((id, cursor) => ({
+      cursor: cursor + 1,
+      event_id: id,
+      event_type: 'developer.workflow.completed',
+      source: 'github',
+      subject_id: id,
+      timestamp: `2026-09-12T20:00:0${cursor}Z`,
+      payload: { repository: `repo-${id}` },
+    }))
+    render(<PulseTimeline items={items} />)
+    const rows = screen.getAllByRole('button', { name: /workflow completed/i })
+    rows[0].focus()
+    fireEvent.keyDown(rows[0], { key: 'ArrowDown' })
+    expect(rows[1]).toHaveFocus()
+    fireEvent.keyDown(rows[1], { key: 'End' })
+    expect(rows[2]).toHaveFocus()
+    fireEvent.keyDown(rows[2], { key: 'Home' })
+    expect(rows[0]).toHaveFocus()
   })
 })

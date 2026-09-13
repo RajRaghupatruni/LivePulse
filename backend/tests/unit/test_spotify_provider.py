@@ -269,8 +269,8 @@ async def test_oauth_state_is_random_expiring_one_use_and_callback_rejects_misma
                 "/api/v1/providers/spotify/oauth/callback",
                 params={"state": valid_state, "code": "authorization-code-secret"},
             )
-            assert callback.status_code == 200
-            assert callback.json() == {"provider": "spotify", "connected": True}
+            assert callback.status_code == 303
+            assert callback.headers["location"] == "/?spotify=connected"
             assert token_request_assertions == [True]
             assert "access-secret" not in callback.text
             assert "refresh-secret" not in callback.text

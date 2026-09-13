@@ -98,6 +98,7 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
                 "source": event.source,
                 "subject_id": event.subject_id,
                 "timestamp": event.occurred_at.isoformat(),
+                "observed_at": event.observed_at.isoformat(),
                 "payload": event.payload,
             }
             if next_state is not None:

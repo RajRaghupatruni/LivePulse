@@ -6,6 +6,20 @@ const apiTarget = (globalThis as { process?: { env?: Record<string, string | und
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  server: { proxy: { '/api': apiTarget, '/health': apiTarget, '/ws': { target: apiTarget.replace('http:', 'ws:').replace('https:', 'wss:'), ws: true } } },
+  server: {
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      // Preserve the loopback browser Host and Origin. The API intentionally
+      // trusts exact local origins and must never see the internal Docker name.
+      '/api': { target: apiTarget, changeOrigin: false },
+      '/health': { target: apiTarget, changeOrigin: false },
+      '/ws': {
+        target: apiTarget.replace('http:', 'ws:').replace('https:', 'wss:'),
+        ws: true,
+        changeOrigin: false,
+      },
+    },
+  },
   test: { environment: 'jsdom', setupFiles: './src/test/setup.ts', css: true },
 })

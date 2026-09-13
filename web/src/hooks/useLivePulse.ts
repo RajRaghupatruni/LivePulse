@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getLiveState, getTimeline, resetDemo, startDemo } from '../lib/api'
+import { getLiveState, getTimeline } from '../lib/api'
+import { connectRealtime } from '../lib/platform'
 import type { FocusState, LiveState, Match, RealtimeMessage, TimelineItem } from '../types/livepulse'
 
 export type ConnectionState = 'CONNECTING' | 'LIVE' | 'RECONNECTING' | 'RESYNCING' | 'DEGRADED'
@@ -57,13 +58,16 @@ export function useLivePulse() {
       subject_id: null,
       match_mode: 'idle',
     },
+    dominant_focus: null,
     updated_at: null,
   })
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
+  const [hasOlder, setHasOlder] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [connection, setConnection] = useState<ConnectionState>('CONNECTING')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [eventArrival, setEventArrival] = useState<Pick<TimelineItem, 'event_id' | 'event_type' | 'subject_id' | 'timestamp' | 'payload'> | null>(null)
   const cursor = useRef(0)
+  const eventArrivalTimer = useRef(0)
   const snapshotGeneration = useRef(0)
   const liveRef = useRef(live)
   const commitLive = useCallback((next: LiveState) => {
@@ -82,8 +86,25 @@ export function useLivePulse() {
     if (generation !== snapshotGeneration.current) return
     commitLive(state)
     setTimeline([...history.items].sort(compareTimelineItems))
+    setHasOlder(history.items.length >= 40)
     cursor.current = Math.max(cursor.current, history.latest_cursor)
   }, [commitLive])
+
+  const loadOlder = useCallback(async () => {
+    if (loadingOlder || !hasOlder || timeline.length === 0) return
+    setLoadingOlder(true)
+    try {
+      const before = Math.min(...timeline.map((item) => item.cursor))
+      const history = await getTimeline(40, before)
+      setTimeline((current) => {
+        const seen = new Set(current.map((item) => item.event_id))
+        return [...current, ...history.items.filter((item) => !seen.has(item.event_id))].sort(compareTimelineItems)
+      })
+      setHasOlder(history.items.length >= 40)
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [hasOlder, loadingOlder, timeline])
 
   useEffect(() => {
     const expiresAt = live.focus.expires_at
@@ -94,6 +115,16 @@ export function useLivePulse() {
     }, delay)
     return () => window.clearTimeout(timer)
   }, [live.focus.expires_at, live.focus.transient, refreshState])
+
+  useEffect(() => {
+    const attention = live.dominant_focus
+    if (!attention?.transient || !attention.expires_at) return
+    const delay = Math.max(0, Date.parse(attention.expires_at) - Date.now() + 75)
+    const timer = window.setTimeout(() => {
+      void refreshState().catch(() => setConnection('DEGRADED'))
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [live.dominant_focus, refreshState])
 
   useEffect(() => {
     let disposed = false
@@ -111,8 +142,18 @@ export function useLivePulse() {
         if (!disposed) setConnection('DEGRADED')
       }
       if (disposed) return
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const nextSocket = new WebSocket(`${protocol}//${window.location.host}/ws?last_cursor=${cursor.current}`)
+      let nextSocket: WebSocket
+      try {
+        nextSocket = connectRealtime(`/ws?last_cursor=${cursor.current}`)
+      } catch {
+        if (!disposed) {
+          setConnection('RECONNECTING')
+          const delay = Math.min(1000 * 2 ** attempt, 12000)
+          attempt += 1
+          reconnectTimer = window.setTimeout(() => void connect(), delay)
+        }
+        return
+      }
       socket = nextSocket
       nextSocket.onopen = () => {
         if (generation !== socketGeneration) return
@@ -144,10 +185,14 @@ export function useLivePulse() {
           event_id: message.event_id,
           event_type: message.event_type ?? 'unknown',
           source: message.source ?? 'unknown',
-          subject_id: message.state?.match_id ?? message.focus?.subject_id ?? '',
+          subject_id: message.state?.match_id ?? message.subject_id ?? message.focus?.subject_id ?? '',
           timestamp: message.timestamp ?? new Date().toISOString(),
+          observed_at: message.observed_at,
           payload: message.payload ?? {},
         }
+        setEventArrival({ event_id: item.event_id, event_type: item.event_type, subject_id: item.subject_id, timestamp: item.timestamp, payload: item.payload })
+        window.clearTimeout(eventArrivalTimer.current)
+        eventArrivalTimer.current = window.setTimeout(() => setEventArrival(null), 2800)
         setTimeline((current) => upsertTimeline(current, item))
         if (message.state) {
           const previous = liveRef.current
@@ -157,6 +202,7 @@ export function useLivePulse() {
             void refreshState().catch(() => setConnection('DEGRADED'))
           } else {
             commitLive(mergeRealtimeState(previous, message.state, message.focus, message.attention))
+            void refreshState().catch(() => setConnection('DEGRADED'))
           }
         } else {
           void refreshState().catch(() => setConnection('DEGRADED'))
@@ -178,37 +224,10 @@ export function useLivePulse() {
       disposed = true
       socketGeneration += 1
       window.clearTimeout(reconnectTimer)
+      window.clearTimeout(eventArrivalTimer.current)
       socket?.close()
     }
   }, [commitLive, refresh, refreshState])
 
-  const runDemo = async (): Promise<boolean> => {
-    setBusy(true)
-    setError(null)
-    try {
-      await startDemo()
-      return true
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not start demo')
-      return false
-    } finally {
-      setBusy(false)
-    }
-  }
-  const reset = async (): Promise<boolean> => {
-    setBusy(true)
-    setError(null)
-    try {
-      await resetDemo()
-      await refresh()
-      return true
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not reset demo')
-      return false
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return { live, timeline, connection, busy, error, runDemo, reset }
+  return { live, timeline, connection, eventArrival, loadOlder, hasOlder, loadingOlder, refresh, refreshState }
 }

@@ -694,6 +694,14 @@ async def test_mixed_provider_timeline_and_replay_preserve_match_state() -> None
             history = await timeline_route(limit=200, before=None, session=session)
             assert history["latest_cursor"] >= max(row.cursor for row in timelines)
             assert event_ids <= {item["event_id"] for item in history["items"]}
+            expected_observed = {
+                str(event.event_id): event.observed_at.isoformat() for event in events
+            }
+            assert all(
+                item["observed_at"] == expected_observed[item["event_id"]]
+                for item in history["items"]
+                if item["event_id"] in expected_observed
+            )
             rest_order = [
                 item["event_id"] for item in history["items"] if item["event_id"] in event_ids
             ]
@@ -723,6 +731,7 @@ async def test_mixed_provider_timeline_and_replay_preserve_match_state() -> None
         assert len(replayed) == len(events)
         assert [item["event_id"] for item in replayed] == [str(row.event_id) for row in timelines]
         assert all(item.get("replayed") is True for item in replayed)
+        assert all(item.get("observed_at") == start.isoformat() for item in replayed)
         assert {item.get("source") for item in replayed} == {
             "api-football",
             "spotify",

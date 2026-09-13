@@ -9,7 +9,7 @@ from app.api import routes
 
 
 class FakeSession:
-    def __init__(self, latest: int, rows: list[SimpleNamespace]) -> None:
+    def __init__(self, latest: int, rows: list[object]) -> None:
         self.latest = latest
         self.rows = rows
 
@@ -22,7 +22,10 @@ class FakeSession:
     async def scalar(self, _query: object) -> int:
         return self.latest
 
-    async def scalars(self, _query: object) -> list[SimpleNamespace]:
+    async def scalars(self, _query: object) -> list[object]:
+        return self.rows
+
+    async def execute(self, _query: object) -> list[object]:
         return self.rows
 
 
@@ -47,10 +50,12 @@ async def test_reconnect_replays_durable_items_after_last_cursor(
         event_id=uuid4(),
         event_type="football.match.goal",
         source="demo-football",
+        subject_id="match-1",
         occurred_at=datetime.now(UTC),
         payload={"side": "home"},
     )
-    monkeypatch.setattr(routes, "SessionFactory", lambda: FakeSession(4, [row]))
+    observed_at = datetime.now(UTC)
+    monkeypatch.setattr(routes, "SessionFactory", lambda: FakeSession(4, [(row, observed_at)]))
     websocket = FakeWebSocket()
 
     await routes.websocket_endpoint(websocket, last_cursor=3)  # type: ignore[arg-type]
@@ -62,7 +67,9 @@ async def test_reconnect_replays_durable_items_after_last_cursor(
             "event_id": str(row.event_id),
             "event_type": "football.match.goal",
             "source": "demo-football",
+            "subject_id": "match-1",
             "timestamp": row.occurred_at.isoformat(),
+            "observed_at": observed_at.isoformat(),
             "payload": {"side": "home"},
             "replayed": True,
         }
