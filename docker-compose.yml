@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: livepulse
       POSTGRES_PASSWORD: livepulse
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -36,8 +36,8 @@ services:
       - --advertise-kafka-addr
       - internal://redpanda:9092,external://localhost:19092
     ports:
-      - "19092:19092"
-      - "9644:9644"
+      - "127.0.0.1:19092:19092"
+      - "127.0.0.1:9644:9644"
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
       interval: 5s
@@ -47,10 +47,26 @@ services:
   backend:
     build: ./backend
     environment:
+      LIVEPULSE_MODE: ${LIVEPULSE_MODE:-PERSONAL_LOCAL}
       DATABASE_URL: postgresql+asyncpg://livepulse:livepulse@postgres:5432/livepulse
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-}
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      WEATHER_LATITUDE: ${WEATHER_LATITUDE:-}
+      WEATHER_LONGITUDE: ${WEATHER_LONGITUDE:-}
+      WEATHER_TIMEZONE: ${WEATHER_TIMEZONE:-}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
+      RETENTION_DAYS: ${RETENTION_DAYS:-365}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,7 +78,7 @@ services:
     environment:
       BACKEND_URL: http://backend:8000
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     depends_on:
       - backend
 

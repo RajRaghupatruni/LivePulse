@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import StatementError
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings
+from app.core.config import MONITORED_GITHUB_REPOSITORIES, Settings, get_settings
 from app.providers.base import PollContext, PollSchedule
 from app.providers.commands import CommandRequest, CommandResult
 from app.providers.credentials import (
@@ -78,17 +78,13 @@ def test_optional_provider_settings_do_not_block_boot_and_repositories_parse() -
         "gmail": False,
         "weather": False,
     }
-    assert settings.github_repositories == [
+    assert MONITORED_GITHUB_REPOSITORIES == (
         "Strata",
         "Tandem",
         "OptiScale",
         "LivePulse",
         "Portfolio",
-    ]
-    assert Settings(_env_file=None, github_repositories="Strata, Tandem").github_repositories == [
-        "Strata",
-        "Tandem",
-    ]
+    )
     assert (
         Settings(_env_file=None, api_football_key="   ").provider_configuration()["football"]
         is False
@@ -359,7 +355,7 @@ async def test_scheduler_times_out_a_slow_source_and_records_failure() -> None:
     await scheduler.stop()
     await asyncio.wait_for(running, timeout=1)
     state = health.snapshot(Settings(_env_file=None))["weather"]
-    assert state["status"] in {"degraded", "unavailable"}
+    assert state["status"] in {"provider_failure", "unavailable"}
     assert state["consecutive_failures"] >= 1
     assert state["detail_code"] == "poll_timeout"
 

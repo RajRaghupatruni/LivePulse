@@ -1,0 +1,23 @@
+{
+  "get": "fixtures",
+  "parameters": { "ids": "190001" },
+  "errors": [],
+  "results": 1,
+  "paging": { "current": 1, "total": 1 },
+  "response": [
+    {
+      "fixture": { "id": 190001, "date": "2026-09-12T17:00:00+00:00", "timestamp": 1789232400, "timezone": "UTC", "periods": { "first": 1789232400, "second": 1789236000 }, "status": { "long": "Second Half", "short": "2H", "elapsed": 79, "extra": null } },
+      "league": { "id": 39, "name": "Premier League", "country": "England", "season": 2026, "round": "Regular Season - 5" },
+      "teams": { "home": { "id": 101, "name": "Northbridge FC", "winner": null }, "away": { "id": 202, "name": "Riverside United", "winner": null } },
+      "goals": { "home": 2, "away": 1 },
+      "score": { "halftime": { "home": 1, "away": 0 }, "fulltime": { "home": null, "away": null }, "extratime": { "home": null, "away": null }, "penalty": { "home": null, "away": null} },
+      "events": [
+        { "time": { "elapsed": 12, "extra": null }, "team": { "id": 101, "name": "Northbridge FC" }, "player": { "id": 501, "name": "A. Vale" }, "assist": { "id": 601, "name": "M. Stone" }, "type": "Goal", "detail": "Normal Goal", "comments": null },
+        { "time": { "elapsed": 31, "extra": null }, "team": { "id": 202, "name": "Riverside United" }, "player": { "id": 502, "name": "J. Reed" }, "assist": { "id": null, "name": null }, "type": "Card", "detail": "Yellow Card", "comments": null },
+        { "time": { "elapsed": 52, "extra": null }, "team": { "id": 101, "name": "Northbridge FC" }, "player": { "id": 503, "name": "R. Hale" }, "assist": { "id": 504, "name": "T. Brooks" }, "type": "subst", "detail": "Substitution 1", "comments": null },
+        { "time": { "elapsed": 67, "extra": null }, "team": { "id": 202, "name": "Riverside United" }, "player": { "id": 505, "name": "L. Noor" }, "assist": { "id": 606, "name": "P. Ward" }, "type": "Goal", "detail": "Normal Goal", "comments": null },
+        { "time": { "elapsed": 75, "extra": null }, "team": { "id": 101, "name": "Northbridge FC" }, "player": { "id": 501, "name": "A. Vale" }, "assist": { "id": 607, "name": "C. Park" }, "type": "Goal", "detail": "Penalty", "comments": null }
+      ]
+    }
+  ]
+}

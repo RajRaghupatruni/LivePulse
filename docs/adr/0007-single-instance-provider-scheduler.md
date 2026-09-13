@@ -1,6 +1,6 @@
 # ADR 0007: Single-instance provider scheduler
 
-**Status:** Accepted for the M3 integration foundation
+**Status:** Accepted and implemented in M3
 
 ## Context
 
@@ -16,5 +16,7 @@ The scheduler is not distributed and does not own provider-specific cadence. A l
 
 - Provider polling failures remain visible and retry rather than silently stopping.
 - Provider observations are handed to an application callback; the source itself does not write projections or timeline state.
-- The scheduler starts no work unless concrete sources are registered.
+- The scheduler starts no work unless concrete sources are registered. Provider source construction itself does not make external API calls; polling begins in background tasks after startup.
 - Multi-instance leases, persistent schedules, and global rate-limit coordination remain future operational work.
+
+Football's quota-aware cadence policy and seven-day discovery horizon are detailed in `docs/providers/football.md` and covered by deterministic tests. The source reports cadence reason and quota/degradation state through provider health.

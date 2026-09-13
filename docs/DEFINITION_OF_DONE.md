@@ -100,40 +100,63 @@ M2 validation environment: Windows PowerShell, Python 3.13, Node 22.17, npm 10.9
 - If the backend is restarted mid-scenario, its in-memory simulator task is cancelled and the remaining timed observations do not resume automatically. Events already committed, outbox publication, projections, and browser reconnect/resync remain durable; reset and start runs the deterministic scenario again. M1 verifies state/reconnect recovery across backend restart, not simulator-task checkpointing.
 - There is no public deployment security/threat model, authentication, production metrics/tracing, or load test in M1.
 
-## M3 Integration Foundation acceptance
+## M3 provider integration acceptance
 
-This foundation is separate from provider delivery. It is complete only when every row is verified; it does not mean any external provider is implemented.
+M3 integrates real backend adapters while preserving the M1/M2 event and recovery invariants. Provider credentials are optional and no external provider is contacted during source construction or application startup.
 
 | Criterion | Status / evidence |
 |---|---|
-| M1/M2 backend/frontend behavior remains intact | **Verified for default suite** — backend 23 passed; seven opt-in PostgreSQL/Redpanda tests were skipped in this M3 run; M1/M2 full integration evidence remains recorded above |
-| Typed provider capability and normalized observation contracts exist without a forced all-capabilities base class | **Verified** — focused provider foundation tests cover typed UTC observations and explicit registry behavior |
-| Poll scheduler has bounded concurrency, cadence hook, timeout, jitter, backoff, Retry-After, and clean cancellation | **Verified** — focused tests cover concurrency limit, observation handoff, timeout, cancellation, bounded jitter, exponential backoff, and Retry-After floor |
-| Missing provider credentials/config do not block startup and status remains truthful | **Verified** — optional settings instantiate empty; missing providers report disconnected and configured-but-unimplemented providers report unknown |
-| Provider health is safe, normalized, extensible, and separate from infrastructure overall status | **Verified** — API returns a `providers` map; unit tests cover status transitions, timestamps, safe codes, and no credential value exposure |
-| Credential persistence requires application-encrypted Fernet ciphertext | **Verified** — SQLite persistence test reads ciphertext from the database, decrypts via the explicit cipher, and confirms plaintext assignment is rejected |
-| Shared provider connection/checkpoint migration upgrades empty and current M2 schemas | **Verified** — current database upgraded from `0002_timeline_source`; an empty scratch database upgraded from base; both passed `alembic check` |
-| Spotify command contract is bounded and does not execute provider calls | **Verified** — required/forbidden argument and result validation tests pass; no Spotify target is registered |
-| Provider DTO boundary and reserved event taxonomy are documented | **Verified** — provider package boundaries, observation/event distinction, capability ADR, and complete reserved event families are recorded |
-| `.env.example` is complete and contains no personal location or real credentials | **Verified by inspection** — all locked optional settings are present, credentials/coordinates are blank, and `.env` remains ignored |
-| No real provider/OpenAI clients, endpoints, or UI were added | **Verified by code inspection** — provider packages are contract boundaries only; no outbound provider client or provider surface was added |
-| Ruff, backend tests, frontend lint/typecheck/tests/build, and migration checks pass | **Verified** — Ruff clean; backend 23 passed/7 skipped; frontend lint passed, Vitest 20 passed, build passed; fresh/current migrations and `alembic check` passed |
+| Football adapter covers all eleven locked competitions and preserves match projection authority | **Verified** — mocked provider pipeline and PostgreSQL/Redpanda integration; one batched live query and seven-day fixture horizon |
+| Football cadence adapts to live state and daily quota | **Verified** — deterministic tests cover healthy live cadence, low-quota tiers, no-live slowdown, Retry-After, budget exhaustion, reset recovery, and detail-request cost |
+| GitHub webhook/reconciliation registration and fixed allowlist | **Verified** — app-start registration test, HMAC/delivery-dedupe and mocked REST tests; exactly five repositories accepted |
+| Spotify OAuth, playback polling, commands, and health are runtime-wired | **Verified** — router and command registration test; mocked OAuth/API tests; missing config remains disconnected/degraded |
+| Gmail read-only OAuth and incremental sync are runtime-wired | **Verified** — mocked OAuth/API tests; Gmail has only `gmail.readonly`; checkpoints commit atomically with accepted event/outbox work |
+| Weather polling, normalized current API, meaningful-change event, and health are runtime-wired | **Verified** — mocked Open-Meteo tests and safe empty-coordinate parsing |
+| Non-football domains share a timeline-only projection path | **Verified** — mixed PostgreSQL/Redpanda test for football, Spotify, GitHub, Gmail, weather, duplicates, replay, active match preservation, and non-football match-state isolation |
+| Late events and at-least-once delivery do not regress authoritative state | **Verified** — projector/reducer regression tests; consumer commits only after durable projection |
+| Zero-provider-credential startup and coherent health | **Verified** — startup test and Compose runtime health endpoint show optional providers disconnected without preventing readiness |
+| Security and privacy boundaries documented and tested | **Verified for the locked single-user/local-first scope** — PERSONAL_LOCAL loopback trust boundary, PUBLIC_DEMO isolation, provider security checks, retention, and confirmation-gated purge are covered by tests and `SECURITY_AND_PRIVACY.md` |
+| Database migrations and provider checkpoints | **Verified** — upgrade/current/check pass; Gmail expired-history recovery and atomic checkpoint tests pass |
+| Backend and frontend validation | **Verified after final validation run below** — results recorded before commit |
+| No M4 AI or major UI redesign added | **Verified** — frontend changes are limited to provider health typing and deterministic mixed-timeline ordering |
 
-M3 validation was run locally with Python 3.13, PostgreSQL, Node, and npm. `docker compose config --quiet` passed. GitHub-hosted CI was not run remotely. Seven existing integration tests are gated behind `LIVEPULSE_INTEGRATION=1` and were not rerun in this foundation pass; they still require the local PostgreSQL/Redpanda vertical test path documented above.
+## M3 integration validation record (before final P0 closure)
 
-## M3 scope and explicit non-implementation
+The initial M3 provider-integration validation on 2026-09-12/13 used Python 3.13, PostgreSQL 16, Redpanda, Node 22, and npm. External provider HTTP was mocked; no live provider credentials or accounts were used. The final P0 security/privacy closure validation below supersedes its security, migration, and suite-count details.
 
-Implemented foundation items are provider package boundaries, protocols for polling/webhooks/commands/health, typed normalized observations, a single-instance poll scheduler with observation handoff, provider configuration placeholders, normalized provider-health records, encrypted-credential persistence and shared checkpoints, and frontend integration types. Future provider and event contracts remain recorded in `PRODUCT_REQUIREMENTS.md`.
+- `python -m ruff check app tests alembic` — passed.
+- `python -m compileall -q app tests alembic` — passed.
+- `python -m pytest -q -p no:cacheprovider` — **121 passed, 10 skipped**. The 10 skips are gated PostgreSQL/Redpanda integration cases; two Starlette/httpx deprecation warnings remain in test dependencies.
+- `$env:LIVEPULSE_INTEGRATION='1'; python -m pytest -q -p no:cacheprovider tests/integration` — **10 passed** against local PostgreSQL + Redpanda. This includes the adapter-observation → canonical/outbox → broker → projector path for football, GitHub, Spotify, Gmail, and weather; duplicate delivery, mixed-domain timeline/replay, Gmail/football checkpoints, and football match-state isolation.
+- `python -m alembic upgrade head`, `python -m alembic current`, and `python -m alembic check` — passed; current revision is `0003_provider_foundation`, with no model drift.
+- `docker compose config --quiet` and `docker compose up --build -d --wait` — passed. PostgreSQL, Redpanda, backend, and web services reported healthy.
+- Runtime HTTP checks — `/health/live` returned `live`, `/health/ready` returned `ready`, system health returned `healthy`, all five providers returned `disconnected` with `configured=false`, and the frontend returned HTTP 200. Compose host ports bind to loopback.
+- `npm test -- --run` — **21 passed across 7 files**; `npm run lint` (includes TypeScript typecheck) and `npm run build` passed; `npm audit --json` reported **0 vulnerabilities**.
 
-Not implemented: API-Football, Spotify OAuth/playback, GitHub webhook/API/reconciliation, Gmail OAuth/API, Open-Meteo, provider-specific DTOs/normalizers, provider UI, OpenAI/M4, distributed scheduling, credential key rotation, provider connection APIs, and production threat-model/security controls. Provider streams should branch only after this shared change is reviewed and committed.
+GitHub-hosted CI was not dispatched during this integration pass.
 
-## M3 risks and technical debt
+## M3 limitations and future work
 
-- Provider health, capability registration, scheduler state, and backoff are in-process/single-instance. No sources are registered in M3, and no external connectivity has been exercised.
-- Scheduler cadence and observation-to-event normalization remain provider responsibilities. A provider adapter must hand meaningful changes to the existing canonical event/outbox path; scheduler outputs are not projections.
-- Fernet protects credentials at rest only when the operator supplies and protects the key. Key rotation/re-encryption, backup/restore procedures, secret-manager integration, and a production threat model remain future work.
-- Shared checkpoints store opaque values, but provider-specific transactionality between checkpoint advancement and canonical event/outbox persistence must be designed and tested by each synchronization stream.
-- This M3 run skipped seven `LIVEPULSE_INTEGRATION=1` tests. The unchanged M1/M2 path has previously passed the recorded full PostgreSQL/Redpanda suite; rerun that suite after the shared foundation is committed and before provider branches merge.
-- Outbox tests inject a broker send error and prove retry; process-kill between broker acknowledgement and the database `published_at` update is not fault-injected. The documented at-least-once duplicate path and idempotent consumer remain the recovery mechanism.
-- The initial locked Vitest 3.2.7 dependency produced two moderate entries for the same [GHSA-82fw-gwwq-j7x9 / CVE-2026-84373](https://github.com/vitest-dev/vitest/security/advisories/GHSA-82fw-gwwq-j7x9): direct `vitest` and transitive `@vitest/mocker`. A reachable unauthenticated mocker WebSocket could register a redirect mock and make the dev process read local files; the advisory is in test tooling and requires the mocker plugin path, which this app's ordinary Vite UI server does not register. The patched line is Vitest 4.1.11. Node 22 and Vite 7 meet its documented prerequisites; Vitest 4 has major-version migration changes, but this project's tests use stable APIs and lint/tests/build pass. `@testing-library/dom` is explicit to satisfy Testing Library's peer. Clean `npm ci` and `npm audit --json` now report zero vulnerabilities; no advisory is deferred.
-- The GitHub Actions workflow has not been run by GitHub yet; only its local constituent commands and service path were exercised.
+- PERSONAL_LOCAL remains single-user and has no conventional account authentication. Its intended boundary is loopback/local-machine isolation; it must not be exposed directly to an untrusted network.
+- Provider scheduler, health, and OAuth refresh serialization are single-instance/in-process. Multi-instance coordination and distributed quota limiting remain future work.
+- Live account/API behavior has not been exercised; operators must configure API-Football, Spotify OAuth plus Premium authorization, GitHub owner/token/webhook secret, Gmail OAuth consent, and local weather coordinates/timezone as applicable.
+- Gmail message bodies are not stored; bounded sender/subject/snippet metadata is retained. Production encryption-key rotation/recovery is future work.
+- A process kill between broker acknowledgement and the outbox `published_at` update is not fault-injected. At-least-once retry and projector idempotency handle duplicate publication.
+- M4 AI, provider-specific UI, distributed scheduling, production metrics/tracing, load tests, Terraform, and the adaptive command-center redesign remain out of scope.
+
+## Final P0 security, privacy, and runtime-mode closure
+
+The final closure is implemented on `codex/m3-integration`. It adds explicit PERSONAL_LOCAL and PUBLIC_DEMO modes, loopback/exact Host and Origin checks (including WebSockets), a separately configured demo database and provider-disabled demo runtime, deterministic 365-day default history retention, and an explicit-confirmation local personal-data purge. No conventional user login or multi-user boundary is claimed. The PUBLIC_DEMO Compose profile uses separate PostgreSQL/Redpanda services and loopback-published ports. See `SECURITY_AND_PRIVACY.md` and ADR 0011 for the exact contract.
+
+Final local validation on 2026-09-13 used Python 3.13, PostgreSQL 16, Redpanda, Node 22, and npm. No live provider credentials or accounts were used.
+
+- `python -m ruff check app tests alembic` and `python -m compileall -q app tests alembic` — passed.
+- `python -m pytest -q -p no:cacheprovider` — **130 passed, 12 skipped**. The skips are the opt-in database/broker integration suite; two Starlette/httpx deprecation warnings remain in the test dependencies.
+- `$env:LIVEPULSE_INTEGRATION='1'; python -m pytest -q tests/integration` — **12 passed** against PostgreSQL and Redpanda, including retention invariants, confirmation-gated purge, provider disconnect behavior, fresh startup after purge, and dedupe after tombstoning.
+- `python -m alembic current` — `0004_retired_event_tombstones`; `python -m alembic check` — no new upgrade operations.
+- `docker compose config --quiet` and `docker compose -f docker-compose.public-demo.yml config --quiet` — passed. Both Compose profiles built and started with `--wait`; PostgreSQL, Redpanda, API, and web were healthy in each profile.
+- PERSONAL_LOCAL runtime probes — live/ready returned `live`/`ready`; system health was `healthy` and reported `PERSONAL_LOCAL`; all five providers were `disconnected/configured=false`. Unsupported Host returned 400 and unsupported Origin returned 403. Inspected published ports for both stacks were bound to `127.0.0.1`.
+- PUBLIC_DEMO runtime probes — health returned `PUBLIC_DEMO`; all five providers reported `disconnected/configured=false/disabled_in_public_demo`; initial private state/timeline was empty; Spotify OAuth, GitHub webhook, and football-provider paths returned 404; web returned HTTP 200. Settings and route tests confirmed realistic credential values are discarded, the dedicated demo database is selected, and state/timeline reads return only the isolated demo store.
+- `npm test -- --run` — **21 passed across 7 files**; `npm run lint` (includes typecheck), `npm run build`, and `npm audit --audit-level=low` passed with **0 vulnerabilities**.
+
+The supplied PUBLIC_DEMO Compose stack was stopped after runtime checks; its separate sanitized volume was retained. The PERSONAL_LOCAL no-credential stack remains available on loopback. Remote GitHub-hosted CI was not dispatched; local CI-equivalent validation is the release evidence.

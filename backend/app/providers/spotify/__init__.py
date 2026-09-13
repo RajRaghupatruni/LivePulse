@@ -1,1 +1,1 @@
-"""Spotify integration boundary; no OAuth or API client is implemented in M3 foundation."""
+"""Spotify OAuth, playback polling, commands and canonical event adapter."""

@@ -9,6 +9,15 @@ def reduce_match_state(current: dict[str, Any] | None, event: CanonicalEvent) ->
     payload = event.payload
     if current and event.version <= current["version"]:
         return current
+    # Keep delayed post-match facts in the timeline without allowing them to
+    # rewrite the authoritative final score or phase. Explicit score corrections
+    # remain valid because they represent a corrected final result.
+    if (
+        current
+        and current["status"] == "fulltime"
+        and not event.event_type.endswith(".score_corrected")
+    ):
+        return current
     state = {
         "match_id": event.subject_id,
         "home_team": str(payload["home_team"]),
@@ -35,13 +44,24 @@ def reduce_match_state(current: dict[str, Any] | None, event: CanonicalEvent) ->
             state["away_score"] += 1
         else:
             raise ValueError("goal event requires side=home or side=away")
-        state.update(status="live", phase="second_half" if state["minute"] >= 45 else "first_half")
+        if state["status"] not in {"fulltime", "halftime"}:
+            state.update(
+                status="live", phase="second_half" if state["minute"] >= 45 else "first_half"
+            )
+    elif event.event_type.endswith(".score_corrected"):
+        state.update(home_score=int(payload["home_score"]), away_score=int(payload["away_score"]))
     elif event.event_type.endswith(".yellow_card") or event.event_type.endswith(".red_card"):
-        state["status"] = "live"
+        if state["status"] not in {"fulltime", "halftime"}:
+            state["status"] = "live"
+    elif event.event_type.endswith(".substitution"):
+        if state["status"] not in {"fulltime", "halftime"}:
+            state["status"] = "live"
     elif event.event_type.endswith(".halftime"):
-        state.update(status="halftime", phase="halftime", minute=45)
+        if state["status"] != "fulltime":
+            state.update(status="halftime", phase="halftime", minute=45)
     elif event.event_type.endswith(".second_half"):
-        state.update(status="live", phase="second_half", minute=45)
+        if state["status"] != "fulltime":
+            state.update(status="live", phase="second_half", minute=45)
     elif event.event_type.endswith(".fulltime"):
         state.update(status="fulltime", phase="fulltime", minute=90)
     return state

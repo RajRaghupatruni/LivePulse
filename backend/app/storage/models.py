@@ -75,7 +75,9 @@ class OutboxMessageRow(Base):
     __tablename__ = "outbox_messages"
     __table_args__ = (Index("ix_outbox_pending", "published_at", "created_at"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
     event_id: Mapped[UUID] = mapped_column(
         ForeignKey("canonical_events.event_id", ondelete="CASCADE"), unique=True
     )
@@ -115,7 +117,9 @@ class PulseTimelineRow(Base):
     __tablename__ = "pulse_timeline"
     __table_args__ = (Index("ix_pulse_timeline_cursor", "cursor"),)
 
-    cursor: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    cursor: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
     event_id: Mapped[UUID] = mapped_column(
         ForeignKey("canonical_events.event_id", ondelete="CASCADE"), unique=True
     )
@@ -137,6 +141,17 @@ class ConsumerProcessedEventRow(Base):
     processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class RetiredEventRow(Base):
+    """Privacy-minimal tombstones preserve delivery/dedupe identity after retention."""
+
+    __tablename__ = "retired_events"
+    __table_args__ = (UniqueConstraint("dedupe_hash", name="uq_retired_events_dedupe_hash"),)
+
+    event_id: Mapped[UUID] = mapped_column(primary_key=True)
+    dedupe_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    retired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class DemoControlRow(Base):

@@ -42,3 +42,7 @@ def configure_logging() -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
+    # httpx request logs include full URLs. Keep them quiet so OAuth codes/state and
+    # other query material cannot leak through a third-party client logger.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

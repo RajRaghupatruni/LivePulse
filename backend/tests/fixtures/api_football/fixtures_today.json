@@ -1,0 +1,23 @@
+{
+  "get": "fixtures",
+  "parameters": { "date": "2026-09-12", "timezone": "UTC" },
+  "errors": [],
+  "results": 2,
+  "paging": { "current": 1, "total": 1 },
+  "response": [
+    {
+      "fixture": { "id": 190001, "date": "2026-09-12T17:00:00+00:00", "timestamp": 1789232400, "timezone": "UTC", "periods": { "first": 1789232400, "second": null }, "status": { "long": "First Half", "short": "1H", "elapsed": 39, "extra": null } },
+      "league": { "id": 39, "name": "Premier League", "country": "England", "season": 2026, "round": "Regular Season - 5" },
+      "teams": { "home": { "id": 101, "name": "Northbridge FC", "winner": null }, "away": { "id": 202, "name": "Riverside United", "winner": null } },
+      "goals": { "home": 1, "away": 0 },
+      "score": { "halftime": { "home": null, "away": null }, "fulltime": { "home": null, "away": null }, "extratime": { "home": null, "away": null }, "penalty": { "home": null, "away": null } }
+    },
+    {
+      "fixture": { "id": 190002, "date": "2026-09-12T20:30:00+00:00", "timestamp": 1789245000, "timezone": "UTC", "periods": { "first": null, "second": null }, "status": { "long": "Not Started", "short": "NS", "elapsed": null, "extra": null } },
+      "league": { "id": 2, "name": "UEFA Champions League", "country": "World", "season": 2026, "round": "League Stage - 1" },
+      "teams": { "home": { "id": 303, "name": "Oldtown Athletic", "winner": null }, "away": { "id": 404, "name": "Lakeside FC", "winner": null } },
+      "goals": { "home": null, "away": null },
+      "score": { "halftime": { "home": null, "away": null }, "fulltime": { "home": null, "away": null }, "extratime": { "home": null, "away": null }, "penalty": { "home": null, "away": null } }
+    }
+  ]
+}

@@ -149,11 +149,7 @@ class PollScheduler:
             except RetryAfterError as exc:
                 failures += 1
                 rate_limit_until = exc.retry_after
-                self._health.failure(
-                    source.provider_id,
-                    exc.detail_code,
-                    rate_limited_until=exc.retry_after,
-                )
+                self._health.rate_limited(source.provider_id, exc.detail_code, exc.retry_after)
                 log.warning(
                     "provider poll rate limited",
                     extra={
@@ -171,7 +167,11 @@ class PollScheduler:
             except Exception as exc:
                 failures += 1
                 detail_code = _safe_error_code(getattr(exc, "detail_code", "poll_failed"))
-                self._health.failure(source.provider_id, detail_code)
+                self._health.failure(
+                    source.provider_id,
+                    detail_code,
+                    immediate_unavailable=bool(getattr(exc, "permanent", False)),
+                )
                 log.error(
                     "provider poll failed",
                     extra={

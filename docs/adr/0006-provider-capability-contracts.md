@@ -1,6 +1,6 @@
 # ADR 0006: Provider capability contracts
 
-**Status:** Accepted for the M3 integration foundation
+**Status:** Accepted and implemented in M3
 
 ## Context
 
@@ -16,6 +16,6 @@ Do not define a reusable OAuth protocol yet. Spotify and Google share OAuth voca
 
 - Provider branches can add their adapters without changing canonical events or the M1 outbox/projector path.
 - Poll and webhook delivery remain separate capabilities; reconciliation can coexist with webhooks.
-- Observations are not persisted or treated as events by this foundation. An adapter must normalize meaningful changes to canonical events.
+- Observations remain adapter input, not domain/frontend contracts. Meaningful changes normalize to canonical events and enter the transactional event/outbox path.
 - Capability registration and health state are single-process in P0. No multi-instance guarantee is added.
-- M3 introduces contracts only; it makes no provider API calls and adds no provider UI.
+- The five M3 provider packages register only their required capabilities. M3 adds no provider-specific UI.

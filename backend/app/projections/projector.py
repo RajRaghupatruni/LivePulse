@@ -29,48 +29,57 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
         async with session.begin():
             persisted = await session.get(CanonicalEventRow, event.event_id)
             if persisted is None:
-                return False  # Reset may have removed it while an old broker record was in flight.
+                # Retention/reset can remove a payload while an old broker record is in flight.
+                # A missing canonical payload must never be projected from the broker copy.
+                return False
             already = await session.get(ConsumerProcessedEventRow, (CONSUMER_NAME, event.event_id))
             if already:
                 return False
             session.add(
                 ConsumerProcessedEventRow(consumer_name=CONSUMER_NAME, event_id=event.event_id)
             )
-            current_row = await session.get(MatchStateRow, event.subject_id)
-            current = None
-            if current_row:
-                current = {
-                    "match_id": current_row.match_id,
-                    "home_team": current_row.home_team,
-                    "away_team": current_row.away_team,
-                    "competition": current_row.competition,
-                    "home_score": current_row.home_score,
-                    "away_score": current_row.away_score,
-                    "status": current_row.status,
-                    "minute": current_row.minute,
-                    "phase": current_row.phase,
-                    "version": current_row.version,
-                }
-            if current and event.version <= current["version"]:
-                log.info(
-                    "stale event ignored by projector",
-                    extra={
-                        "event_id": str(event.event_id),
-                        "event_type": event.event_type,
-                        "subject_id": event.subject_id,
-                        "consumer": CONSUMER_NAME,
-                    },
-                )
-                return False
-            next_state = reduce_match_state(current, event)
-            if current_row is None:
-                current_row = MatchStateRow(
-                    match_id=event.subject_id, **_match_state_fields(next_state)
-                )
-                session.add(current_row)
-            else:
-                for key, value in _match_state_fields(next_state).items():
-                    setattr(current_row, key, value)
+            next_state = None
+            if event.event_type.startswith("football.match."):
+                current_row = await session.get(MatchStateRow, event.subject_id)
+                current = None
+                if current_row:
+                    current = {
+                        "match_id": current_row.match_id,
+                        "home_team": current_row.home_team,
+                        "away_team": current_row.away_team,
+                        "competition": current_row.competition,
+                        "home_score": current_row.home_score,
+                        "away_score": current_row.away_score,
+                        "status": current_row.status,
+                        "minute": current_row.minute,
+                        "phase": current_row.phase,
+                        "version": current_row.version,
+                    }
+                if current and event.version <= current["version"]:
+                    log.info(
+                        "stale football event recorded without changing match state",
+                        extra={
+                            "event_id": str(event.event_id),
+                            "event_type": event.event_type,
+                            "subject_id": event.subject_id,
+                            "consumer": CONSUMER_NAME,
+                        },
+                    )
+                else:
+                    next_state = reduce_match_state(current, event)
+                    if next_state is current:
+                        # A newer-version late fact after full time is retained
+                        # in the timeline without issuing a false live-state
+                        # notification or rewriting the final projection.
+                        next_state = None
+                    elif current_row is None:
+                        current_row = MatchStateRow(
+                            match_id=event.subject_id, **_match_state_fields(next_state)
+                        )
+                        session.add(current_row)
+                    else:
+                        for key, value in _match_state_fields(next_state).items():
+                            setattr(current_row, key, value)
             timeline = PulseTimelineRow(
                 event_id=event.event_id,
                 event_type=event.event_type,
@@ -81,25 +90,27 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
             )
             session.add(timeline)
             await session.flush()
-            focus = focus_for_match(
-                str(next_state["status"]),
-                event.event_type,
-                next_state["updated_at"],  # type: ignore[arg-type]
-                source="football",
-                subject_id=event.subject_id,
-            )
             notification = {
                 "type": "timeline.item",
                 "cursor": timeline.cursor,
                 "event_id": str(event.event_id),
                 "event_type": event.event_type,
                 "source": event.source,
+                "subject_id": event.subject_id,
                 "timestamp": event.occurred_at.isoformat(),
                 "payload": event.payload,
-                "attention": focus.score,
-                "focus": focus.model_dump(mode="json"),
             }
-            notification["state"] = _public_state(next_state)
+            if next_state is not None:
+                focus = focus_for_match(
+                    str(next_state["status"]),
+                    event.event_type,
+                    next_state["updated_at"],  # type: ignore[arg-type]
+                    source="football",
+                    subject_id=event.subject_id,
+                )
+                notification["attention"] = focus.score
+                notification["focus"] = focus.model_dump(mode="json")
+                notification["state"] = _public_state(next_state)
     if notification:
         await realtime.publish(notification)
         log.info(

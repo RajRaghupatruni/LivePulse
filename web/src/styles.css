@@ -92,8 +92,8 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 /* Subtle, inspectable operational health */
 .health-control { position: relative; }
 .health-summary { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 7px; border: 0; background: transparent; color: var(--success); font: 8px var(--font-mono); letter-spacing: .06em; white-space: nowrap; }
-.health-summary.status-degraded, .health-summary.status-unavailable { color: var(--critical); }
-.health-summary.status-unknown { color: var(--warning); }
+.health-summary.status-degraded, .health-summary.status-unavailable, .health-summary.status-auth_failure, .health-summary.status-provider_failure { color: var(--critical); }
+.health-summary.status-unknown, .health-summary.status-disconnected, .health-summary.status-connecting, .health-summary.status-stale, .health-summary.status-resyncing, .health-summary.status-rate_limited { color: var(--warning); }
 .health-chevron { color: var(--quiet); transition: transform var(--duration-fast) ease; }
 .health-chevron.is-open { transform: rotate(180deg); }
 .health-panel { position: absolute; top: calc(100% + var(--space-3)); right: 0; z-index: 60; width: min(390px, calc(100vw - 28px)); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: #111719; box-shadow: 0 18px 52px rgb(0 0 0 / 48%); }
@@ -104,8 +104,8 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 .health-list { display: grid; gap: 0; margin: var(--space-4) 0 0; padding: 0; list-style: none; }
 .health-row { display: flex; align-items: center; gap: var(--space-3); min-height: 52px; border-top: 1px solid var(--border-soft); }
 .health-row-icon { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid currentColor; border-radius: 50%; color: var(--success); }
-.health-row.status-degraded .health-row-icon, .health-row.status-unavailable .health-row-icon { color: var(--critical); }
-.health-row.status-unknown .health-row-icon { color: var(--warning); }
+.health-row.status-degraded .health-row-icon, .health-row.status-unavailable .health-row-icon, .health-row.status-auth_failure .health-row-icon, .health-row.status-provider_failure .health-row-icon { color: var(--critical); }
+.health-row.status-unknown .health-row-icon, .health-row.status-disconnected .health-row-icon, .health-row.status-connecting .health-row-icon, .health-row.status-stale .health-row-icon, .health-row.status-resyncing .health-row-icon, .health-row.status-rate_limited .health-row-icon { color: var(--warning); }
 .health-row-copy { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .health-row-copy strong { color: var(--text-secondary); font-size: 11px; font-weight: 500; }
 .health-row-copy small { color: var(--muted); font: 9px var(--font-mono); text-transform: capitalize; }

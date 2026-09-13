@@ -1,0 +1,73 @@
+name: livepulse-public-demo
+services:
+  public_demo_postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: livepulse_public_demo
+      POSTGRES_USER: livepulse_public_demo
+      POSTGRES_PASSWORD: ${PUBLIC_DEMO_DB_PASSWORD:?Set PUBLIC_DEMO_DB_PASSWORD to a new random value}
+    volumes:
+      - public_demo_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U livepulse_public_demo -d livepulse_public_demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redpanda:
+    image: redpandadata/redpanda:v25.2.1
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:29092
+      - --advertise-kafka-addr
+      - internal://redpanda:9092,external://localhost:29092
+    ports:
+      - "127.0.0.1:29092:29092"
+      - "127.0.0.1:19644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  backend:
+    build: ./backend
+    environment:
+      LIVEPULSE_MODE: PUBLIC_DEMO
+      DATABASE_URL: postgresql+asyncpg://livepulse_personal_unused:unused@127.0.0.1:5432/livepulse_personal
+      PUBLIC_DEMO_DATABASE_URL: postgresql+asyncpg://livepulse_public_demo:${PUBLIC_DEMO_DB_PASSWORD:?Set PUBLIC_DEMO_DB_PASSWORD}@public_demo_postgres:5432/livepulse_public_demo
+      PUBLIC_DEMO_ALLOWED_HOSTS: '${PUBLIC_DEMO_ALLOWED_HOSTS:-["localhost","127.0.0.1"]}'
+      PUBLIC_DEMO_ALLOWED_ORIGINS: '${PUBLIC_DEMO_ALLOWED_ORIGINS:-["http://localhost:5174","http://127.0.0.1:5174"]}'
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      DEMO_STEP_SECONDS: ${DEMO_STEP_SECONDS:-6}
+    ports:
+      - "127.0.0.1:8001:8000"
+    depends_on:
+      public_demo_postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  web:
+    build: ./web
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "127.0.0.1:5174:5173"
+    depends_on:
+      - backend
+
+volumes:
+  public_demo_postgres_data:
