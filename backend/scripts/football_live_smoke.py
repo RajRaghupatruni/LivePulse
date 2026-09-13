@@ -9,7 +9,10 @@ from app.providers.football.leagues import resolve_league_catalog
 
 async def main() -> int:
     settings = get_settings()
-    if settings.api_football_key is None or not settings.api_football_key.get_secret_value().strip():
+    if (
+        settings.api_football_key is None
+        or not settings.api_football_key.get_secret_value().strip()
+    ):
         print("API_FOOTBALL_KEY is not set; no provider request was made.")
         return 2
 

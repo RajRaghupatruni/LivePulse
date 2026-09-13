@@ -89,6 +89,37 @@ function crest(team: string) {
   return team.split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'FC'
 }
 
+type FootballSourceState = 'healthy' | 'unconfigured' | 'connecting' | 'paused' | 'unavailable' | 'degraded'
+
+function footballSourceState(fixtures: FootballFixtures | null, available: boolean): FootballSourceState {
+  const status = fixtures?.provider_status
+  if (status === 'disconnected') return 'unconfigured'
+  if (status === 'rate_limited') return 'paused'
+  if (status === 'connecting' || status === 'unknown' || status === 'resyncing') return 'connecting'
+  if (status === 'provider_failure' || status === 'unavailable' || status === 'auth_failure' || status === 'stale') return 'unavailable'
+  if (status === 'degraded') return 'degraded'
+  if (!available) return 'unavailable'
+  return status === 'healthy' ? 'healthy' : 'connecting'
+}
+
+const sourceStateText: Record<FootballSourceState, string> = {
+  healthy: 'NO SCHEDULED MATCH',
+  unconfigured: 'SOURCE NOT CONFIGURED',
+  connecting: 'CONNECTING TO SOURCE',
+  paused: 'DATA TEMPORARILY PAUSED',
+  unavailable: 'SOURCE UNAVAILABLE',
+  degraded: 'SOURCE DEGRADED',
+}
+
+const sourceMessage: Record<FootballSourceState, string> = {
+  healthy: 'When the provider reports a fixture, this surface will establish the match context.',
+  unconfigured: 'Connect API-Football in the local provider configuration to show real fixtures.',
+  connecting: 'LivePulse is waiting for a confirmed provider observation.',
+  paused: 'The provider reports a rate limit or exhausted request budget. The schedule may be stale.',
+  unavailable: 'LivePulse cannot confirm the current schedule while the configured provider is unavailable.',
+  degraded: 'The provider is degraded, so an empty schedule cannot be confirmed.',
+}
+
 export function MatchStage({ live, fixtures, fixtureLoading, fixtureAvailable, timeline = [], eventArrival = null }: {
   live: LiveState
   fixtures: FootballFixtures | null
@@ -110,6 +141,7 @@ export function MatchStage({ live, fixtures, fixtureLoading, fixtureAvailable, t
   const match = picked.match
   const selectedMatchId = match?.match_id
   const selectedIndex = candidates.findIndex((fixture) => fixture.subject_id === selectedMatchId)
+  const sourceState = footballSourceState(fixtures, fixtureAvailable)
   const moveMatch = useCallback((direction: number) => {
     if (!candidates.length) return
     const index = selectedIndex >= 0 ? selectedIndex : 0
@@ -154,10 +186,10 @@ export function MatchStage({ live, fixtures, fixtureLoading, fixtureAvailable, t
   const isGoal = event?.event_type.endsWith('.goal')
   const eventPresentation = event ? presentTimelineItem(event) : null
 
-  if (!match) return <section className="match-stage match-stage-idle" aria-label="Football match surface">
+  if (!match) return <section className={`match-stage match-stage-idle match-source-${sourceState}`} aria-label="Football match surface">
     <div className="match-art" aria-hidden="true" /><div className="match-shade" aria-hidden="true" />
-    <header className="match-stage-top"><div><span className="surface-overline">FOOTBALL · MATCH CENTER</span><h2>Football</h2></div><span className="match-phase-label"><i />{fixtureLoading ? 'CHECKING SOURCE' : fixtureAvailable ? 'NO SCHEDULED MATCH' : 'SOURCE UNAVAILABLE'}</span></header>
-    <div className="match-empty"><span className="match-pulse-mark"><Activity size={22} /></span><h3>{fixtureLoading ? 'Resolving the next fixture' : fixtures?.provider_status === 'disconnected' ? 'Connect a football source' : fixtureAvailable ? 'No match in the current window' : 'Football data is unavailable'}</h3><p>{fixtureAvailable ? 'When the provider reports a fixture, this surface will establish the match context.' : 'Provider configuration and freshness are available in System Pulse.'}</p><button type="button" onClick={openDetails}>Open match center <MoveUpRight size={15} /></button></div>
+    <header className="match-stage-top"><div><span className="surface-overline">FOOTBALL · MATCH CENTER</span><h2>Football</h2></div><span className={`match-phase-label${sourceState === 'healthy' && !fixtureLoading ? '' : ' phase-source-warning'}`}><i />{fixtureLoading ? 'CHECKING SOURCE' : sourceStateText[sourceState]}</span></header>
+    <div className="match-empty"><span className="match-pulse-mark"><Activity size={22} /></span><h3>{fixtureLoading ? 'Resolving the next fixture' : sourceState === 'healthy' ? 'No match in the current window' : sourceState === 'unconfigured' ? 'Connect a football source' : sourceState === 'paused' ? 'Football data temporarily paused' : sourceState === 'connecting' ? 'Football source is connecting' : sourceState === 'degraded' ? 'Football provider degraded' : 'Football provider unavailable'}</h3><p>{sourceMessage[sourceState]}</p>{sourceState === 'healthy' ? <button type="button" onClick={openDetails}>Open match center <MoveUpRight size={15} /></button> : <button type="button" onClick={() => window.dispatchEvent(new Event('livepulse:open-health'))}>View provider status <MoveUpRight size={15} /></button>}</div>
     <div className="match-field-signature" aria-hidden="true"><svg viewBox="0 0 440 180"><path d="M10 114 C64 42 139 38 211 75 C275 109 333 138 430 60"/><path d="M8 130 C66 61 139 56 211 91 C279 124 336 151 430 77"/><path d="M7 147 C68 80 141 73 213 107 C284 139 340 166 430 94"/><path d="M16 97 C74 27 144 22 212 57 C272 88 331 118 422 44"/></svg></div>
     {detailOpen && createPortal(<MatchDetails title="Football match center" tab={detailTab} setTab={setDetailTab} fixtures={candidates} selectedId={selectedId} selectMatch={(id) => { setSelectedId(id); closeDetails() }} updates={updates} onClose={closeDetails} />, document.body)}
   </section>
@@ -168,6 +200,7 @@ export function MatchStage({ live, fixtures, fixtureLoading, fixtureAvailable, t
     <header className="match-stage-top">
       <div className="match-competition"><span className={`match-state-dot${picked.kind === 'live' || picked.kind === 'halftime' ? ' is-live' : ''}`} /><div><span className="surface-overline">{match.competition || 'FOOTBALL'}</span><h2>{picked.kind === 'upcoming' ? 'Match approaching' : picked.kind === 'fulltime' ? 'Final result' : 'Match center'}</h2></div></div>
       <div className={`match-phase-label${picked.kind === 'live' ? ' phase-live' : ''}`}><i />{phaseName(picked)}</div>
+      {sourceState !== 'healthy' && <span className={`match-provider-warning provider-${sourceState}`} role="status">{sourceStateText[sourceState]}</span>}
       <div className="match-controls"><button type="button" aria-label="Previous match" disabled={candidates.length < 2} onClick={() => moveMatch(-1)}><ChevronLeft size={16}/></button><button type="button" aria-label="Next match" disabled={candidates.length < 2} onClick={() => moveMatch(1)}><ChevronRight size={16}/></button><button type="button" className="match-auto" onClick={() => { setSelectedId(null); setPinned(false) }}>AUTO</button><button type="button" className={pinned ? 'is-pinned' : ''} aria-pressed={pinned} aria-label={pinned ? 'Unpin this match' : 'Pin this match'} onClick={() => { setPinned((value) => !value); if (!selectedId) setSelectedId(match.match_id) }}><Pin size={14}/></button></div>
     </header>
     <div className="match-summary"><span>{picked.kind === 'upcoming' ? `KICKOFF · ${new Date(picked.kickoff!).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : picked.kind === 'live' ? 'LIVE MATCH' : picked.kind === 'halftime' ? 'INTERVAL' : 'PROVIDER OBSERVED'}</span><span>{candidates.length ? `MATCH ${selectedIndex >= 0 ? selectedIndex + 1 : 1} / ${candidates.length}` : 'SINGLE MATCH'}</span></div>

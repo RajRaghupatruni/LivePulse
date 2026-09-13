@@ -764,7 +764,11 @@ async def test_mixed_provider_timeline_and_replay_preserve_match_state() -> None
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_provider_observations_reach_timeline_through_outbox_and_redpanda() -> None:
+async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.providers.football.store as football_store_module
+
     settings = get_settings()
     await ensure_topic()
     start = datetime.now(UTC)
@@ -786,6 +790,7 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
         "has_observation",
     )
     fixture_id = int(uuid7().int % 700_000_000) + 100_000_000
+    baseline_fixture_id = fixture_id + 1
     match_id = f"api-football:fixture:{fixture_id}"
     github_id = f"acme/Strata/workflow-{uuid7()}"
     message_id = uuid7().hex
@@ -793,6 +798,9 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
     history_id = str(uuid7().int % 10**30)
     message_state_key = f"{MESSAGE_STATE_PREFIX}{message_id}"
     football_checkpoint_key = f"fixture:{fixture_id}"
+    baseline_fixture_key = f"fixture:{baseline_fixture_id}"
+    football_baseline_key = f"fixture-baseline-test:{uuid4().hex}"
+    monkeypatch.setattr(football_store_module, "BASELINE_CHECKPOINT_KEY", football_baseline_key)
     provider_sources = {"api-football", "github", "spotify", "gmail", "weather"}
     event_rows: list[CanonicalEventRow] = []
 
@@ -816,15 +824,37 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
             )
         )
         weather_selection = await session.get(WeatherLocationSelectionRow, 1)
-        previous_weather_location_id = (
-            weather_selection.location_id if weather_selection else None
-        )
-        previous_weather_selected_at = (
-            weather_selection.selected_at if weather_selection else None
-        )
+        previous_weather_location_id = weather_selection.location_id if weather_selection else None
+        previous_weather_selected_at = weather_selection.selected_at if weather_selection else None
     await activate_match(match_id)
 
     # Each provider adapter produces its own canonical event and transactional outbox row.
+    # Establish the first-sync baseline before this test's newly discovered
+    # live fixture so the vertical slice still exercises its scheduled event.
+    baseline_fixture = FootballFixtureObservation(
+        fixture_id=baseline_fixture_id,
+        league_id=39,
+        competition="Premier League",
+        home_team="Baseline Home",
+        away_team="Baseline Away",
+        kickoff_at=start + timedelta(days=2),
+        status_code="NS",
+        status_label="Not Started",
+        home_score=0,
+        away_score=0,
+    )
+    baseline_observation = Observation[FootballFixtureObservation](
+        provider_id="football",
+        external_entity_id=baseline_fixture.external_entity_id,
+        observed_at=start,
+        content=baseline_fixture,
+        correlation_id=correlation_id,
+    )
+    await FootballCheckpointStore().ingest(
+        [baseline_observation],
+        PollContext(correlation_id=uuid7(), scheduled_at=start),
+    )
+
     kickoff = start - timedelta(minutes=14)
     fixture = FootballFixtureObservation(
         fixture_id=fixture_id,
@@ -1146,7 +1176,12 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                     delete(ProviderCheckpointRow).where(
                         ProviderCheckpointRow.provider == "football",
                         ProviderCheckpointRow.checkpoint_key.in_(
-                            (football_checkpoint_key, "pending-final")
+                            (
+                                football_checkpoint_key,
+                                baseline_fixture_key,
+                                football_baseline_key,
+                                "pending-final",
+                            )
                         ),
                     )
                 )
@@ -1178,9 +1213,7 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                     weather_selection.location_id = previous_weather_location_id
                     weather_selection.selected_at = previous_weather_selected_at
                 await session.execute(
-                    delete(WeatherLocationRow).where(
-                        WeatherLocationRow.id == weather_location.id
-                    )
+                    delete(WeatherLocationRow).where(WeatherLocationRow.id == weather_location.id)
                 )
                 control = await session.get(DemoControlRow, 1)
                 if control and control.active_match_id == match_id:

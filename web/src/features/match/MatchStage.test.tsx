@@ -28,6 +28,33 @@ describe('MatchStage', () => {
     expect(screen.getByText('No match in the current window')).toBeInTheDocument()
   })
 
+  it('does not present provider failures or rate limits as an empty schedule', () => {
+    const { rerender } = render(<MatchStage live={liveState} fixtures={emptyFixtures('provider_failure')} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByText('Football provider unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('No match in the current window')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View provider status' })).toBeInTheDocument()
+
+    rerender(<MatchStage live={liveState} fixtures={emptyFixtures('rate_limited')} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByText('Football data temporarily paused')).toBeInTheDocument()
+    expect(screen.queryByText('No match in the current window')).not.toBeInTheDocument()
+  })
+
+  it('treats a failed fixture request as unavailable even when it has an older healthy snapshot', () => {
+    render(<MatchStage live={liveState} fixtures={emptyFixtures('healthy')} fixtureLoading={false} fixtureAvailable={false} />)
+    expect(screen.getByText('Football provider unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('No match in the current window')).not.toBeInTheDocument()
+  })
+
+  it('keeps the last known match visible while showing provider failure status', () => {
+    const fixtures: FootballFixtures = {
+      provider_status: 'provider_failure', observed_at: '2026-09-13T01:00:00Z', today: [], live: [],
+      upcoming: [{ fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'scheduled', minute: 0, home_score: null, away_score: null }],
+    }
+    render(<MatchStage live={liveState} fixtures={fixtures} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByRole('status')).toHaveTextContent('SOURCE UNAVAILABLE')
+    expect(screen.getByText('Northstar FC')).toBeInTheDocument()
+  })
+
   it('shows a schedule-specific empty state when the provider reports no fixtures', () => {
     render(<MatchStage live={liveState} fixtures={emptyFixtures('healthy')} fixtureLoading={false} fixtureAvailable />)
     fireEvent.click(screen.getByRole('button', { name: 'Open match center' }))

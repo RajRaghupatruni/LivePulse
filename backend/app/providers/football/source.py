@@ -170,6 +170,7 @@ class FootballPollSource:
             self._fixtures = {}
             self._fixture_service.replace([], observed_at=now)
             self._last_observation_at = now
+            await self.store.ingest([], context)
             return ()
 
         today = now.date()
@@ -237,6 +238,8 @@ class FootballPollSource:
         self._fixtures = by_id
         self._fixture_service.replace(list(by_id.values()), observed_at=now)
         self._last_observation_at = now
+        if not by_id:
+            await self.store.ingest([], context)
         return tuple(
             Observation[FootballFixtureObservation](
                 provider_id=self.provider_id,

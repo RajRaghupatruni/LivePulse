@@ -109,6 +109,7 @@ def event(
 class MemoryStore:
     def __init__(self) -> None:
         self.values: dict[str, tuple[dict[str, Any], datetime]] = {}
+        self.ingested_batches: list[int] = []
 
     async def get_json(self, key: str):
         return self.values.get(key)
@@ -118,6 +119,10 @@ class MemoryStore:
 
     async def list_json(self, prefix: str):
         return [(key, value) for key, (value, _) in self.values.items() if key.startswith(prefix)]
+
+    async def ingest(self, observations, _context) -> int:
+        self.ingested_batches.append(len(observations))
+        return 0
 
 
 def test_api_football_fixture_dtos_validate_current_response_shape() -> None:
@@ -397,6 +402,29 @@ def test_duplicate_snapshot_and_repeated_event_array_suppress_duplicate_events()
     assert same_checkpoint["version"] == checkpoint["version"]
 
 
+def test_baseline_fixture_suppresses_only_scheduled_discovery() -> None:
+    content = make_match(status="1H", minute=18, home_score=1, away_score=0)
+    discovered, checkpoint = diff_fixture(
+        None,
+        observation(content),
+        correlation_id=uuid7(),
+        emit_scheduled=False,
+    )
+
+    assert FootballEventType.SCHEDULED.value not in [item.event_type for item in discovered]
+    assert FootballEventType.KICKOFF.value in [item.event_type for item in discovered]
+    assert FootballEventType.GOAL.value in [item.event_type for item in discovered]
+    assert checkpoint["scheduled_kickoff"] == content.kickoff_at.isoformat()
+    assert checkpoint["scheduled_emitted"] is False
+
+    repeated, _ = diff_fixture(
+        checkpoint,
+        observation(content, observed_at=NOW + timedelta(minutes=1)),
+        correlation_id=uuid7(),
+    )
+    assert repeated == []
+
+
 def test_goal_card_and_substitution_map_to_canonical_families() -> None:
     content = make_match(
         status="2H",
@@ -600,6 +628,34 @@ async def test_source_filters_leagues_batches_live_details_and_serves_fixture_li
     assert [item.fixture_id for item in service.today(now=NOW)] == [190001, 190002]
     assert [item.fixture_id for item in service.upcoming(now=NOW)] == [190002]
     assert [item.fixture_id for item in service.live()] == [190001]
+
+
+@pytest.mark.asyncio
+async def test_successful_empty_fixture_sync_persists_an_empty_baseline() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/leagues":
+            return httpx.Response(200, json=fixture_json("leagues_current.json"))
+        if "from" in request.url.params:
+            return httpx.Response(200, json={"errors": [], "results": 0, "response": []})
+        raise AssertionError(f"unexpected provider request: {request.url.path}")
+
+    store = MemoryStore()
+    source = FootballPollSource.from_configuration(
+        "fixture-test-key",
+        store=store,  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+        clock=lambda: NOW,
+    )
+    assert source is not None
+    try:
+        observations = await source.observe(
+            context=PollContext(correlation_id=uuid7(), scheduled_at=NOW)
+        )
+    finally:
+        await source.close()
+
+    assert observations == ()
+    assert store.ingested_batches == [0]
 
 
 def test_empty_database_checkpoint_store_constructs_without_network() -> None:

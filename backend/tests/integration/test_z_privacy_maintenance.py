@@ -153,6 +153,14 @@ async def test_retention_prunes_old_history_but_preserves_current_state_and_chec
                 )
                 assert outbox is not None
                 outbox.published_at = old
+            # Model an active publisher lease so the normal local publisher
+            # cannot consume the row before this test checks retention's
+            # unpublished-work protection.
+            pending_outbox = await session.scalar(
+                select(OutboxMessageRow).where(OutboxMessageRow.event_id == pending_event.event_id)
+            )
+            assert pending_outbox is not None
+            pending_outbox.claimed_at = now
             session.add(
                 ProviderCheckpointRow(
                     provider="gmail",

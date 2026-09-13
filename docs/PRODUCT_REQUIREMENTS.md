@@ -11,7 +11,7 @@ LivePulse is a single-user personal realtime command center intended to stay ope
 | Requirement | Status |
 |---|---|
 | Unified Pulse Timeline across product domains | **Implemented** for football, Spotify, GitHub, Gmail, and weather through one durable timeline; final React UI provides domain-aware chronology, safe details, freshness and cursor history |
-| Football: EPL, La Liga, Bundesliga, Ligue 1, EFL Championship, Champions League, Europa League, FA Cup, Carabao Cup, Serie A, MLS | **Implemented in M3** with API-Football polling, canonical/outbox events, authoritative football projection, quota-aware cadence, and seven-day upcoming horizon |
+| Football: EPL, La Liga, Bundesliga, Ligue 1, EFL Championship, Champions League, Europa League, FA Cup, Carabao Cup, Serie A, MLS | **Implemented in M3** with API-Football polling, canonical/outbox events, authoritative football projection, quota-aware cadence, seven-day upcoming horizon, and a durable quiet initial-fixture baseline |
 | Spotify current playback and controls | **Implemented in M3 backend** with OAuth, encrypted credentials, playback polling, playback/device endpoints, and typed commands; requires local credentials and an authorized Premium account |
 | Exactly five monitored GitHub repositories initially: Strata, Tandem, OptiScale, LivePulse, Portfolio | **Implemented in M3 backend** with HMAC-validated webhooks, delivery dedupe, and bounded REST reconciliation; requires an owner, webhook secret and/or token |
 | Read-only Gmail | **Implemented in M3 backend** with `gmail.readonly`, encrypted credentials, bounded metadata sync, and transactional history checkpoints; requires Google OAuth setup |

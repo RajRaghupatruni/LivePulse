@@ -15,6 +15,8 @@ from app.providers.observations import Observation
 from app.storage.database import SessionFactory
 from app.storage.models import ProviderCheckpointRow
 
+BASELINE_CHECKPOINT_KEY = "fixture-baseline:v1"
+
 
 class FootballCheckpointStore:
     """Stores small discovery caches and commits each fixture checkpoint with its outbox."""
@@ -88,17 +90,34 @@ class FootballCheckpointStore:
         context: PollContext,
     ) -> int:
         if not observations:
+            await self._establish_empty_baseline(context)
             return 0
         persisted_count = 0
         async with self._session_factory() as session:
             async with session.begin():
+                baseline_row = await _checkpoint_row(session, BASELINE_CHECKPOINT_KEY)
+                fixture_rows: dict[int, ProviderCheckpointRow | None] = {}
+                for observation in observations:
+                    fixture_id = observation.content.fixture_id
+                    fixture_rows[fixture_id] = await _checkpoint_row(
+                        session, f"fixture:{fixture_id}"
+                    )
+
+                # Older installations already have per-fixture checkpoints but
+                # no baseline marker. Treat those as synchronized so upgrading
+                # the code does not suppress a genuinely new fixture event.
+                legacy_baseline_exists = any(row is not None for row in fixture_rows.values())
+                if baseline_row is None and not legacy_baseline_exists:
+                    legacy_baseline_exists = await _has_fixture_checkpoints(session)
+                establishing_baseline = baseline_row is None and not legacy_baseline_exists
                 pending_row = await _checkpoint_row(session, "pending-final")
                 pending_final = set(
                     _decode_pending_index(pending_row.checkpoint_value) if pending_row else []
                 )
                 for observation in observations:
-                    key = f"fixture:{observation.content.fixture_id}"
-                    checkpoint = await _checkpoint_row(session, key)
+                    fixture_id = observation.content.fixture_id
+                    key = f"fixture:{fixture_id}"
+                    checkpoint = fixture_rows[fixture_id]
                     previous = (
                         _decode_checkpoint(checkpoint.checkpoint_value) if checkpoint else None
                     )
@@ -106,6 +125,7 @@ class FootballCheckpointStore:
                         previous,
                         observation,
                         correlation_id=context.correlation_id,
+                        emit_scheduled=not (establishing_baseline and checkpoint is None),
                     )
                     for event in events:
                         if await persist_event_and_outbox(session, event):
@@ -124,9 +144,9 @@ class FootballCheckpointStore:
                         checkpoint.checkpoint_value = encoded
                         checkpoint.observed_at = observation.observed_at
                     if state["final_verification_pending"]:
-                        pending_final.add(observation.content.fixture_id)
+                        pending_final.add(fixture_id)
                     else:
-                        pending_final.discard(observation.content.fixture_id)
+                        pending_final.discard(fixture_id)
                 pending_value = json.dumps(
                     {"fixture_ids": sorted(pending_final)}, separators=(",", ":")
                 )
@@ -142,7 +162,51 @@ class FootballCheckpointStore:
                 else:
                     pending_row.checkpoint_value = pending_value
                     pending_row.observed_at = context.scheduled_at
+                if baseline_row is None:
+                    session.add(
+                        ProviderCheckpointRow(
+                            provider="football",
+                            checkpoint_key=BASELINE_CHECKPOINT_KEY,
+                            checkpoint_value=json.dumps(
+                                {
+                                    "version": 1,
+                                    "established_at": context.scheduled_at.isoformat(),
+                                    "fixture_count": len(observations),
+                                    "initial_sync": establishing_baseline,
+                                },
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            ),
+                            observed_at=context.scheduled_at,
+                        )
+                    )
         return persisted_count
+
+    async def _establish_empty_baseline(self, context: PollContext) -> None:
+        """Persist a successful empty fixture sync so later arrivals are discoveries."""
+        async with self._session_factory() as session:
+            async with session.begin():
+                baseline_row = await _checkpoint_row(session, BASELINE_CHECKPOINT_KEY)
+                if baseline_row is not None:
+                    return
+                initial_sync = not await _has_fixture_checkpoints(session)
+                session.add(
+                    ProviderCheckpointRow(
+                        provider="football",
+                        checkpoint_key=BASELINE_CHECKPOINT_KEY,
+                        checkpoint_value=json.dumps(
+                            {
+                                "version": 1,
+                                "established_at": context.scheduled_at.isoformat(),
+                                "fixture_count": 0,
+                                "initial_sync": initial_sync,
+                            },
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                        observed_at=context.scheduled_at,
+                    )
+                )
 
 
 async def _checkpoint_row(session: AsyncSession, key: str) -> ProviderCheckpointRow | None:
@@ -153,6 +217,20 @@ async def _checkpoint_row(session: AsyncSession, key: str) -> ProviderCheckpoint
             ProviderCheckpointRow.checkpoint_key == key,
         )
         .with_for_update()
+    )
+
+
+async def _has_fixture_checkpoints(session: AsyncSession) -> bool:
+    return (
+        await session.scalar(
+            select(ProviderCheckpointRow.checkpoint_key)
+            .where(
+                ProviderCheckpointRow.provider == "football",
+                ProviderCheckpointRow.checkpoint_key.startswith("fixture:"),
+            )
+            .limit(1)
+        )
+        is not None
     )
 
 

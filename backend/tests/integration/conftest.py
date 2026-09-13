@@ -33,9 +33,7 @@ async def _delete_integration_topic(topic: str) -> None:
 
     from app.core.config import get_settings
 
-    admin = AIOKafkaAdminClient(
-        bootstrap_servers=get_settings().kafka_bootstrap_servers
-    )
+    admin = AIOKafkaAdminClient(bootstrap_servers=get_settings().kafka_bootstrap_servers)
     started = False
     try:
         await admin.start()

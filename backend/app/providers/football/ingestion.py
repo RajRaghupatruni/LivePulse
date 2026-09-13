@@ -38,8 +38,14 @@ def diff_fixture(
     observation: Observation[FootballFixtureObservation],
     *,
     correlation_id: UUID,
+    emit_scheduled: bool = True,
 ) -> tuple[list[CanonicalEvent], dict[str, Any]]:
-    """Create only newly observed canonical facts, then return a candidate checkpoint."""
+    """Create newly observed facts, then return a candidate checkpoint.
+
+    ``emit_scheduled`` is false only while a provider's first successful
+    synchronization establishes its existing-fixture baseline. Other facts
+    (including live match events) retain their normal semantics.
+    """
 
     fixture = observation.content
     prior = previous or {}
@@ -143,7 +149,8 @@ def diff_fixture(
     kickoff_at = fixture.kickoff_at
     actual_kickoff_at = fixture.actual_kickoff_at or kickoff_at
     kickoff_key = kickoff_at.isoformat()
-    if prior.get("scheduled_kickoff") != kickoff_key:
+    scheduled_changed = prior.get("scheduled_kickoff") != kickoff_key
+    if emit_scheduled and scheduled_changed:
         emit(
             FootballEventType.SCHEDULED,
             identity=f"scheduled:{prior_version}:{kickoff_key}",
@@ -264,7 +271,9 @@ def diff_fixture(
         "home_score": reported_home,
         "away_score": reported_away,
         "event_ids": sorted(event_ids),
-        "scheduled_emitted": True,
+        "scheduled_emitted": bool(
+            prior.get("scheduled_emitted") or (emit_scheduled and scheduled_changed)
+        ),
         "kickoff_emitted": bool(prior.get("kickoff_emitted") or is_live_or_later),
         "halftime_emitted": halftime_emitted,
         "second_half_emitted": second_half_emitted,
