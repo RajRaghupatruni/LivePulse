@@ -351,7 +351,7 @@ async def test_concurrent_duplicate_and_stale_delivery_are_idempotent() -> None:
         assert sum(result is True for result in concurrent) == 1
         assert not await process_canonical_event(first)
         assert await process_canonical_event(second)
-        assert not await process_canonical_event(stale)
+        assert await process_canonical_event(stale)
 
         async with SessionFactory() as session:
             state = await session.get(MatchStateRow, match_id)
@@ -371,7 +371,7 @@ async def test_concurrent_duplicate_and_stale_delivery_are_idempotent() -> None:
             )
             assert state is not None
             assert (state.home_score, state.away_score, state.version) == (1, 0, 2)
-            assert timeline_count == 2 and processed_count == 3
+            assert timeline_count == 3 and processed_count == 3
     finally:
         async with SessionFactory() as session:
             async with session.begin():

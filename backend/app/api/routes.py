@@ -36,11 +36,20 @@ from app.projections.projector import run_projector
 from app.providers.base import PollContext
 from app.providers.football.models import FootballFixtureObservation
 from app.providers.football.routes import router as football_router
-from app.providers.football.service import football_fixture_service
 from app.providers.football.source import FootballPollSource
+from app.providers.github.events import GithubChange
+from app.providers.github.health import github_health
+from app.providers.github.reconcile import GithubReconciliationSource
+from app.providers.github.router import router as github_router
+from app.providers.github.storage import persist_observations
 from app.providers.observations import Observation
+from app.providers.registry import ProviderRegistry
 from app.providers.scheduler import PollScheduler
 from app.providers.status import provider_health
+from app.providers.weather.router import router as weather_router
+from app.providers.weather.service import weather_state
+from app.providers.weather.source import WeatherObservation, build_weather_source
+from app.providers.weather.storage import persist_weather_observation
 from app.realtime.manager import realtime
 from app.simulator.comeback import activate_match, clear_demo_data, run_comeback
 from app.storage.database import SessionFactory, engine, get_session
@@ -76,37 +85,86 @@ async def lifespan(_app: FastAPI):
     configure_logging()
     report_component("demo_source", "healthy", "idle")
     settings = get_settings()
-    tasks: list[asyncio.Task[None]] = []
+    github_health.initialize(settings)
+    provider_registry = ProviderRegistry()
     football_source: FootballPollSource | None = None
+    if settings.provider_configuration()["football"]:
+        football_source = FootballPollSource.from_configuration(settings.api_football_key)
+        if football_source is not None:
+            provider_registry.register_poll_source(football_source)
+    if github_health.reconciliation_configured(settings):
+        provider_registry.register_poll_source(GithubReconciliationSource(settings))
+    weather_source = build_weather_source(settings)
+    if weather_source is not None:
+        provider_registry.register_poll_source(weather_source)
+
+    async def persist_provider_observations(
+        provider: str,
+        observations: Sequence[Observation[BaseModel]],
+        context: PollContext,
+    ) -> None:
+        if provider == "football":
+            football_observations = [
+                observation
+                for observation in observations
+                if isinstance(observation.content, FootballFixtureObservation)
+            ]
+            if len(football_observations) != len(observations) or football_source is None:
+                raise ValueError("football source returned an unexpected observation type")
+            await football_source.store.ingest(football_observations, context)
+            await football_source.observations_persisted()
+        elif provider == "github":
+            github_observations = [
+                observation
+                for observation in observations
+                if isinstance(observation.content, GithubChange)
+            ]
+            if len(github_observations) != len(observations):
+                raise ValueError("GitHub source returned an unexpected observation type")
+            try:
+                await persist_observations(
+                    github_observations, correlation_id=context.correlation_id
+                )
+            except Exception:
+                github_health.note_reconciliation_failure("event_persist_failed")
+                raise
+        elif provider == "weather":
+            weather_observations = [
+                observation
+                for observation in observations
+                if isinstance(observation.content, WeatherObservation)
+            ]
+            if len(weather_observations) != len(observations):
+                raise ValueError("weather source returned an unexpected observation type")
+            for observation in weather_observations:
+                try:
+                    await persist_weather_observation(
+                        observation.content,
+                        observed_at=observation.observed_at,
+                        correlation_id=context.correlation_id,
+                    )
+                except Exception:
+                    weather_state.record_failure("event_persist_failed")
+                    raise
+        else:
+            raise ValueError("no ingestion adapter is registered for this provider")
+
+    tasks: list[asyncio.Task[None]] = []
     poll_scheduler: PollScheduler | None = None
     if settings.run_background_services:
         tasks = [
             asyncio.create_task(run_publisher(), name="outbox-publisher"),
             asyncio.create_task(run_projector(), name="event-projector"),
         ]
-        if settings.provider_configuration()["football"]:
-            football_source = FootballPollSource.from_configuration(settings.api_football_key)
-            if football_source is not None:
-
-                async def handle_football(
-                    _provider: str,
-                    observations: Sequence[Observation[BaseModel]],
-                    context: PollContext,
-                ) -> None:
-                    typed = [
-                        item
-                        for item in observations
-                        if isinstance(item.content, FootballFixtureObservation)
-                    ]
-                    if len(typed) != len(observations):
-                        raise ValueError("football source returned an unexpected observation type")
-                    await football_source.store.ingest(typed, context)
-                    await football_source.observations_persisted()
-
-                poll_scheduler = PollScheduler(
-                    [football_source], observation_handler=handle_football
-                )
-                tasks.append(asyncio.create_task(poll_scheduler.run(), name="provider-pollers"))
+        if provider_registry.poll_sources:
+            scheduler = PollScheduler(
+                provider_registry.poll_sources,
+                observation_handler=persist_provider_observations,
+                max_concurrency=2,
+            )
+            poll_scheduler = scheduler
+            tasks.append(asyncio.create_task(scheduler.run(), name="provider-poll-scheduler"))
+    _app.state.provider_registry = provider_registry
     yield
     global scenario_task
     if scenario_task is not None and not scenario_task.done():
@@ -444,3 +502,5 @@ async def websocket_endpoint(websocket: WebSocket, last_cursor: int | None = Non
 
 
 app.include_router(router)
+app.include_router(github_router)
+app.include_router(weather_router)

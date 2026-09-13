@@ -4,6 +4,10 @@ from typing import Annotated
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+LOCKED_GITHUB_REPOSITORIES = frozenset(
+    {"strata", "tandem", "optiscale", "livepulse", "portfolio"}
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file="../.env", env_file_encoding="utf-8", extra="ignore")
@@ -21,6 +25,7 @@ class Settings(BaseSettings):
     spotify_client_id: str | None = None
     spotify_client_secret: SecretStr | None = None
     spotify_redirect_uri: str | None = None
+    github_owner: str | None = None
     github_token: SecretStr | None = None
     github_webhook_secret: SecretStr | None = None
     github_repositories: Annotated[list[str], NoDecode] = Field(
@@ -67,9 +72,11 @@ class Settings(BaseSettings):
                     self.spotify_redirect_uri,
                 )
             ),
-            "github": bool(self.github_repositories)
-            and has(self.github_token)
-            and has(self.github_webhook_secret),
+            "github": any(
+                name.casefold() in LOCKED_GITHUB_REPOSITORIES for name in self.github_repositories
+            )
+            and has(self.github_owner)
+            and (has(self.github_token) or has(self.github_webhook_secret)),
             "gmail": all(
                 has(value)
                 for value in (
