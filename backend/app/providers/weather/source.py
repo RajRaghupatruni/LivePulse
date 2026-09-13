@@ -19,15 +19,19 @@ from app.providers.weather.client import (
     WeatherConditions,
     parse_forecast,
 )
+from app.providers.weather.location import WeatherLocation
+from app.providers.weather.locations import weather_location_for_poll
 from app.providers.weather.service import weather_configured, weather_state
 from app.providers.weather.storage import weather_checkpoints
 
 CheckpointReader = Callable[[Sequence[str]], Awaitable[dict[str, str]]]
+LocationReader = Callable[[], Awaitable[WeatherLocation | None]]
 
 
 class WeatherObservation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    location: WeatherLocation
     current: WeatherConditions
     meaningful_change: bool
     change_reasons: tuple[str, ...]
@@ -49,13 +53,14 @@ class WeatherPollSource:
         *,
         client: OpenMeteoClient | None = None,
         checkpoint_reader: CheckpointReader = weather_checkpoints,
+        location_reader: LocationReader | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        if not weather_configured(settings):
-            raise ValueError("weather polling requires coordinates and timezone")
-        self._latitude = settings.weather_latitude
-        self._longitude = settings.weather_longitude
-        self._timezone = settings.weather_timezone or ""
+        self._settings = settings
+        self._location_reader = location_reader or (
+            lambda: weather_location_for_poll(self._settings)
+        )
+        self._configured = weather_configured(settings)
         self._client = client or OpenMeteoClient()
         self._checkpoint_reader = checkpoint_reader
         self._clock = clock
@@ -63,14 +68,25 @@ class WeatherPollSource:
     def cadence(self, *, context: PollContext) -> timedelta:
         return self.schedule.interval
 
+    @property
+    def configured(self) -> bool:
+        return self._configured
+
     async def observe(self, *, context: PollContext) -> Sequence[Observation[BaseModel]]:
         observed_at = self._clock().astimezone(UTC)
         try:
+            location = await self._location_reader()
+            self._configured = location is not None
+            if location is None:
+                return ()
             raw = await self._client.forecast(
-                latitude=self._latitude, longitude=self._longitude, timezone=self._timezone
+                latitude=location.latitude,
+                longitude=location.longitude,
+                timezone=location.timezone,
             )
-            current = parse_forecast(raw, timezone=self._timezone, observed_at=observed_at)
-            saved = await self._checkpoint_reader(("event_baseline",))
+            current = parse_forecast(raw, timezone=location.timezone, observed_at=observed_at)
+            baseline_key = f"event_baseline:{location.id}"
+            saved = await self._checkpoint_reader((baseline_key, "has_observation"))
         except asyncio.CancelledError:
             weather_state.record_failure("weather_poll_cancelled", now=observed_at)
             raise
@@ -83,21 +99,24 @@ class WeatherPollSource:
             weather_state.record_failure("weather_poll_failed", now=observed_at)
             raise
         baseline = (
-            WeatherConditions.model_validate_json(saved["event_baseline"])
-            if saved.get("event_baseline")
+            WeatherConditions.model_validate_json(saved[baseline_key])
+            if saved.get(baseline_key)
             else None
         )
         reasons = meaningful_change_reasons(baseline, current)
+        if baseline is None and saved.get("has_observation") == "1":
+            reasons = []
         sample = WeatherObservation(
+            location=location,
             current=current,
             meaningful_change=bool(reasons),
             change_reasons=tuple(reasons),
-            dedupe_key=_dedupe_key(baseline, current),
+            dedupe_key=_dedupe_key(str(location.id), baseline, current),
         )
         return (
             Observation[WeatherObservation](
                 provider_id="weather",
-                external_entity_id="configured-location",
+                external_entity_id=str(location.id),
                 observed_at=observed_at,
                 content=sample,
                 provider_version=current.observed_at.isoformat(),
@@ -110,9 +129,9 @@ class WeatherPollSource:
 def build_weather_source(
     settings: Settings,
     **kwargs: Any,
-) -> WeatherPollSource | None:
-    """Missing location silently disables polling and never adds a baked-in fallback."""
-    return WeatherPollSource(settings, **kwargs) if weather_configured(settings) else None
+) -> WeatherPollSource:
+    """Build a dynamic source even before the user has selected a location."""
+    return WeatherPollSource(settings, **kwargs)
 
 
 def meaningful_change_reasons(
@@ -144,8 +163,10 @@ def meaningful_change_reasons(
     return reasons
 
 
-def _dedupe_key(baseline: WeatherConditions | None, current: WeatherConditions) -> str:
+def _dedupe_key(
+    location_id: str, baseline: WeatherConditions | None, current: WeatherConditions
+) -> str:
     content = current.model_dump(exclude={"observed_at", "local_time"})
     stable = json.dumps(content, sort_keys=True, separators=(",", ":"))
     epoch = baseline.observed_at.isoformat() if baseline else "initial"
-    return f"weather:{hashlib.sha256(f'{epoch}:{stable}'.encode()).hexdigest()}"
+    return f"weather:{hashlib.sha256(f'{location_id}:{epoch}:{stable}'.encode()).hexdigest()}"

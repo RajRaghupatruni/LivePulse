@@ -37,6 +37,7 @@ from app.providers.spotify.playback import (
     SpotifyPlaybackSnapshot,
 )
 from app.providers.weather.client import WeatherConditions
+from app.providers.weather.location import WeatherLocation
 from app.providers.weather.source import WeatherObservation
 from app.providers.weather.storage import persist_weather_observation
 from app.realtime.manager import realtime
@@ -50,6 +51,8 @@ from app.storage.models import (
     OutboxMessageRow,
     ProviderCheckpointRow,
     PulseTimelineRow,
+    WeatherLocationRow,
+    WeatherLocationSelectionRow,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -767,6 +770,21 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
     start = datetime.now(UTC)
     correlation_id = uuid7()
     context = PollContext(correlation_id=correlation_id, scheduled_at=start)
+    weather_location = WeatherLocation(
+        id=uuid4(),
+        display_name="Celina, Texas, United States",
+        city="Celina",
+        region="Texas",
+        country="United States",
+        latitude=33.3246,
+        longitude=-96.7844,
+        timezone="America/Chicago",
+    )
+    weather_checkpoint_keys = (
+        f"current:{weather_location.id}",
+        f"event_baseline:{weather_location.id}",
+        "has_observation",
+    )
     fixture_id = int(uuid7().int % 700_000_000) + 100_000_000
     match_id = f"api-football:fixture:{fixture_id}"
     github_id = f"acme/Strata/workflow-{uuid7()}"
@@ -792,10 +810,17 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                     )
                     | (
                         (ProviderCheckpointRow.provider == "weather")
-                        & ProviderCheckpointRow.checkpoint_key.in_(("current", "event_baseline"))
+                        & ProviderCheckpointRow.checkpoint_key.in_(weather_checkpoint_keys)
                     )
                 )
             )
+        )
+        weather_selection = await session.get(WeatherLocationSelectionRow, 1)
+        previous_weather_location_id = (
+            weather_selection.location_id if weather_selection else None
+        )
+        previous_weather_selected_at = (
+            weather_selection.selected_at if weather_selection else None
         )
     await activate_match(match_id)
 
@@ -900,7 +925,30 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
     await ingest_gmail_observations("gmail", [gmail_observation], context)
 
     weather_time = start + timedelta(seconds=8)
+    async with SessionFactory() as session:
+        async with session.begin():
+            session.add(
+                WeatherLocationRow(
+                    id=weather_location.id,
+                    display_name=weather_location.display_name,
+                    city=weather_location.city,
+                    region=weather_location.region,
+                    country=weather_location.country,
+                    latitude=weather_location.latitude,
+                    longitude=weather_location.longitude,
+                    timezone=weather_location.timezone,
+                    selected_at=weather_time,
+                    last_used_at=weather_time,
+                )
+            )
+            weather_selection = await session.get(WeatherLocationSelectionRow, 1)
+            if weather_selection is None:
+                weather_selection = WeatherLocationSelectionRow(singleton_id=1)
+                session.add(weather_selection)
+            weather_selection.location_id = weather_location.id
+            weather_selection.selected_at = weather_time
     weather_observation = WeatherObservation(
+        location=weather_location,
         current=WeatherConditions(
             observed_at=weather_time,
             local_time=weather_time.isoformat(),
@@ -1113,7 +1161,7 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                 await session.execute(
                     delete(ProviderCheckpointRow).where(
                         ProviderCheckpointRow.provider == "weather",
-                        ProviderCheckpointRow.checkpoint_key.in_(("current", "event_baseline")),
+                        ProviderCheckpointRow.checkpoint_key.in_(weather_checkpoint_keys),
                     )
                 )
                 for row in previous_checkpoints:
@@ -1125,6 +1173,15 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                             observed_at=row.observed_at,
                         )
                     )
+                weather_selection = await session.get(WeatherLocationSelectionRow, 1)
+                if weather_selection:
+                    weather_selection.location_id = previous_weather_location_id
+                    weather_selection.selected_at = previous_weather_selected_at
+                await session.execute(
+                    delete(WeatherLocationRow).where(
+                        WeatherLocationRow.id == weather_location.id
+                    )
+                )
                 control = await session.get(DemoControlRow, 1)
                 if control and control.active_match_id == match_id:
                     control.active_match_id = previous_match_id

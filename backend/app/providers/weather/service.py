@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from threading import RLock
 from typing import Literal
+from uuid import UUID
 
 from app.core.config import Settings
 from app.providers.weather.client import WeatherConditions
@@ -11,39 +12,73 @@ from app.providers.weather.client import WeatherConditions
 class WeatherStateService:
     def __init__(self) -> None:
         self._current: WeatherConditions | None = None
+        self._location_id: UUID | None = None
         self._fetched_at: datetime | None = None
         self._last_failure_at: datetime | None = None
         self._last_failure_code = "not_observed"
         self._lock = RLock()
 
-    def update(self, current: WeatherConditions, *, fetched_at: datetime) -> None:
+    def update(
+        self,
+        current: WeatherConditions,
+        *,
+        fetched_at: datetime,
+        location_id: UUID | None = None,
+    ) -> None:
         if fetched_at.tzinfo is None or fetched_at.utcoffset() is None:
             raise ValueError("fetched_at must be timezone-aware")
         with self._lock:
             self._current = current
+            self._location_id = location_id
             self._fetched_at = fetched_at.astimezone(UTC)
             self._last_failure_at = None
             self._last_failure_code = "not_observed"
+
+    def restore(
+        self,
+        current: WeatherConditions,
+        *,
+        fetched_at: datetime,
+        location_id: UUID,
+    ) -> None:
+        """Load the durable snapshot without masking a failure observed this process."""
+        if fetched_at.tzinfo is None or fetched_at.utcoffset() is None:
+            raise ValueError("fetched_at must be timezone-aware")
+        with self._lock:
+            if (
+                self._location_id != location_id
+                or self._fetched_at is None
+                or fetched_at.astimezone(UTC) >= self._fetched_at
+            ):
+                self._current = current
+                self._location_id = location_id
+                self._fetched_at = fetched_at.astimezone(UTC)
 
     def record_failure(self, detail_code: str, *, now: datetime | None = None) -> None:
         with self._lock:
             self._last_failure_at = (now or datetime.now(UTC)).astimezone(UTC)
             self._last_failure_code = detail_code
 
-    def current(self) -> WeatherConditions | None:
+    def current(self, *, location_id: UUID | None = None) -> WeatherConditions | None:
         with self._lock:
+            if location_id is not None and self._location_id != location_id:
+                return None
             return self._current
 
     def health_snapshot(
-        self, settings: Settings, *, now: datetime | None = None
+        self,
+        settings: Settings,
+        *,
+        now: datetime | None = None,
+        configured: bool | None = None,
     ) -> dict[str, object]:
         current_time = (now or datetime.now(UTC)).astimezone(UTC)
-        configured = weather_configured(settings)
+        is_configured = weather_configured(settings) if configured is None else configured
         with self._lock:
             fetched_at = self._fetched_at
             failure_at = self._last_failure_at
             failure_code = self._last_failure_code
-        if not configured:
+        if not is_configured:
             status: Literal["healthy", "degraded", "disconnected", "unknown"] = "disconnected"
             freshness = "not_configured"
             detail_code = "configuration_missing"
@@ -71,7 +106,7 @@ class WeatherStateService:
         return {
             "provider": "weather",
             "status": status,
-            "configured": configured,
+            "configured": is_configured,
             "freshness": freshness,
             "detail_code": detail_code,
             "last_success_at": fetched_at.isoformat() if fetched_at else None,

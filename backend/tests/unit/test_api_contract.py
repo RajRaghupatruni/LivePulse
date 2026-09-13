@@ -15,6 +15,9 @@ def test_required_api_and_websocket_routes_are_registered() -> None:
         "/api/v1/providers/github/health",
         "/api/v1/providers/weather/current",
         "/api/v1/providers/weather/health",
+        "/api/v1/providers/weather/location",
+        "/api/v1/providers/weather/location/search",
+        "/api/v1/providers/weather/location/select",
         "/api/v1/providers/gmail/connection",
     } <= paths
     assert "/ws" in {getattr(route, "path", None) for route in app.routes}

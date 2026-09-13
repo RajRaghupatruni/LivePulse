@@ -15,7 +15,7 @@ LivePulse is a single-user personal realtime command center intended to stay ope
 | Spotify current playback and controls | **Implemented in M3 backend** with OAuth, encrypted credentials, playback polling, playback/device endpoints, and typed commands; requires local credentials and an authorized Premium account |
 | Exactly five monitored GitHub repositories initially: Strata, Tandem, OptiScale, LivePulse, Portfolio | **Implemented in M3 backend** with HMAC-validated webhooks, delivery dedupe, and bounded REST reconciliation; requires an owner, webhook secret and/or token |
 | Read-only Gmail | **Implemented in M3 backend** with `gmail.readonly`, encrypted credentials, bounded metadata sync, and transactional history checkpoints; requires Google OAuth setup |
-| Weather | **Implemented in M3 backend** with Open-Meteo current/daily conditions and meaningful-change events; requires local coordinates/timezone and no API key |
+| Weather | **Implemented** with Open-Meteo current/daily conditions and meaningful-change events, searchable persisted locations, five recent places, and location-aware atmosphere; legacy coordinates/timezone are bootstrap fallback only |
 | Persistent live local date/time/day | **Implemented in M1 UI** |
 | Deterministic Focus Engine | **Implemented**; football `FocusState` remains authoritative, and ADR 0012 adds server-selected cross-domain `dominant_focus` for important Gmail, CI failures, and provider degradation |
 | Adaptive command-center UI | **Implemented in final UI milestone**; provider-backed, reference-led landscape/portrait compositions, state-aware surfaces, and a shell-agnostic platform boundary ready for a later local desktop shell |
@@ -45,10 +45,10 @@ These implementation requirements remain locked. Backend integration paths are i
 - **Spotify:** real OAuth; current playback, track/context/device state, and play/pause/next/previous/seek/volume/device-transfer controls; Premium account required; credentials and refresh tokens remain server-managed and encrypted.
 - **GitHub:** monitor exactly Strata, Tandem, OptiScale, LivePulse, and Portfolio initially. Support signed webhook ingestion and startup/catch-up reconciliation so webhook receipt is not the only correctness path.
 - **Gmail:** read-only P0. Never send, reply, draft, label, delete, or mutate. Synchronize incrementally with durable checkpoints and expose useful message/thread metadata. Do not add Google Pub/Sub for P0 unless a documented need changes that decision.
-- **Weather:** Open-Meteo, no paid/keyed source, current conditions plus concise daily context. Coordinates/timezone come only from ignored local environment/configuration; never commit a personal location.
+- **Weather:** Open-Meteo geocoding and current conditions plus concise daily context; a user-selected location is persisted in PostgreSQL with five recent places and drives refresh and atmospheric time/weather treatment. Legacy coordinates/timezone from ignored local environment/configuration are bootstrap fallback only; never commit a personal location. Physical place labels come from geocoding, never from a timezone name.
 - **AI:** M4 only. GPT-5.6 Luna chat, streaming, web search, and LivePulse-aware tools remain not implemented in M3.
 
-All provider observations normalize to immutable canonical events and share the transactional event/outbox, Redpanda, idempotent projector, durable Pulse Timeline, and replay path. Football events alone mutate football match state. Provider-specific DTOs stay inside adapters and do not enter canonical or frontend contracts. M3 adds no provider-specific UI.
+All provider observations normalize to immutable canonical events and share the transactional event/outbox, Redpanda, idempotent projector, durable Pulse Timeline, and replay path. Football events alone mutate football match state. Provider-specific DTOs stay inside adapters and do not enter canonical or frontend contracts. The M3 integration baseline added no provider-specific UI; the later selectable-weather extension adds only the user-controlled location selector and atmosphere inputs, not a fabricated provider dashboard.
 
 ## Final UI milestone and local desktop target
 

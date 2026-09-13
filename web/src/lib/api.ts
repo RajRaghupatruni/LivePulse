@@ -7,6 +7,8 @@ import type {
   SystemHealth,
   TimelineResponse,
   WeatherSnapshot,
+  WeatherLocation,
+  WeatherLocationState,
 } from '../types/livepulse'
 import { apiUrl } from './platform'
 
@@ -50,6 +52,16 @@ export const getFootballFixtures = () => request<FootballFixtures>('/api/v1/foot
 export const getSpotifyPlayback = () => request<SpotifyPlaybackView>('/api/v1/providers/spotify/playback')
 export const getSpotifyDevices = () => request<SpotifyDevice[]>('/api/v1/providers/spotify/devices')
 export const getWeatherSnapshot = () => request<WeatherSnapshot>('/api/v1/providers/weather/current')
+export const getWeatherLocationState = () => request<WeatherLocationState>('/api/v1/providers/weather/location')
+export const searchWeatherLocations = (query: string, signal?: AbortSignal) => {
+  const params = new URLSearchParams({ q: query })
+  return request<{ results: WeatherLocation[] }>(`/api/v1/providers/weather/location/search?${params}`, { signal })
+}
+export const selectWeatherLocation = (location: WeatherLocation) =>
+  request<WeatherLocationState>('/api/v1/providers/weather/location/select', {
+    method: 'POST',
+    body: JSON.stringify({ ...location, selected_at: null, last_used_at: null }),
+  })
 export const getGmailInbox = (limit = 4) => request<GmailInbox>(`/api/v1/providers/gmail/messages?limit=${limit}`)
 export const getGmailMessage = (messageId: string) => request<GmailMessage>(`/api/v1/providers/gmail/messages/${encodeURIComponent(messageId)}`)
 

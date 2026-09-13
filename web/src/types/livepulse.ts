@@ -177,6 +177,8 @@ export type SpotifyCommandResult = {
 }
 
 export type WeatherSnapshot = {
+  location: WeatherLocation | null
+  recent_locations: WeatherLocation[]
   current: {
     observed_at: string
     local_time: string
@@ -194,6 +196,24 @@ export type WeatherSnapshot = {
   } | null
   fetched_at: string | null
   health: ProviderHealth
+}
+
+export type WeatherLocation = {
+  id: string
+  display_name: string
+  city: string
+  region: string | null
+  country: string
+  latitude: number
+  longitude: number
+  timezone: string
+  selected_at: string | null
+  last_used_at: string | null
+}
+
+export type WeatherLocationState = {
+  selected: WeatherLocation | null
+  recent: WeatherLocation[]
 }
 
 export type RealtimeMessage = {

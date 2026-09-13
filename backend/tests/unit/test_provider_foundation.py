@@ -360,6 +360,36 @@ async def test_scheduler_times_out_a_slow_source_and_records_failure() -> None:
     assert state["detail_code"] == "poll_timeout"
 
 
+@pytest.mark.asyncio
+async def test_scheduler_poll_now_uses_normal_observation_persistence_handler() -> None:
+    delivered: list[Observation[DemoContent]] = []
+
+    async def observe(context: PollContext):
+        return (
+            Observation[DemoContent](
+                provider_id="weather",
+                external_entity_id="selected-location",
+                observed_at=context.scheduled_at,
+                content=DemoContent(count=1),
+                correlation_id=context.correlation_id,
+            ),
+        )
+
+    async def handler(_provider: str, observations, _context: PollContext) -> None:
+        delivered.extend(observations)
+
+    health = ProviderHealthRegistry()
+    scheduler = PollScheduler(
+        [FakePollSource("weather", observe)],
+        observation_handler=handler,
+        health=health,
+    )
+    observations = await scheduler.poll_now("weather")
+    assert len(observations) == len(delivered) == 1
+    assert delivered[0].external_entity_id == "selected-location"
+    assert health.snapshot(Settings(_env_file=None))["weather"]["status"] == "healthy"
+
+
 def test_credential_cipher_and_database_column_reject_plaintext() -> None:
     key = Fernet.generate_key().decode("ascii")
     cipher = CredentialCipher(key)

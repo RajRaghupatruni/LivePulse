@@ -6,6 +6,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -214,3 +215,32 @@ class ProviderCheckpointRow(Base):
         onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+
+class WeatherLocationRow(Base):
+    __tablename__ = "weather_locations"
+    __table_args__ = (Index("ix_weather_locations_last_used_at", "last_used_at"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(240), nullable=False)
+    city: Mapped[str] = mapped_column(String(120), nullable=False)
+    region: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    country: Mapped[str] = mapped_column(String(120), nullable=False)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(100), nullable=False)
+    selected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WeatherLocationSelectionRow(Base):
+    __tablename__ = "weather_location_selection"
+    __table_args__ = (
+        CheckConstraint("singleton_id = 1", name="ck_weather_location_singleton"),
+    )
+
+    singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    location_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("weather_locations.id", ondelete="SET NULL"), nullable=True
+    )
+    selected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

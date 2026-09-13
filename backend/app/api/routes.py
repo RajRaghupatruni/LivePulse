@@ -267,7 +267,12 @@ async def lifespan(_app: FastAPI):
     if weather_source is not None:
         provider_registry.register_poll_source(weather_source)
         provider_health.report(
-            "weather", "connecting", "awaiting_first_observation", configured=True
+            "weather",
+            "connecting" if weather_source.configured else "disconnected",
+            "awaiting_first_observation"
+            if weather_source.configured
+            else "location_missing",
+            configured=weather_source.configured,
         )
 
     async def persist_provider_observations(
@@ -355,6 +360,7 @@ async def lifespan(_app: FastAPI):
             poll_scheduler = scheduler
             tasks.append(asyncio.create_task(scheduler.run(), name="provider-poll-scheduler"))
     _app.state.provider_registry = provider_registry
+    _app.state.poll_scheduler = poll_scheduler
     _app.state.runtime_mode = settings.runtime_mode.value
     yield
     global scenario_task
@@ -562,7 +568,11 @@ async def _provider_health_snapshot() -> dict[str, dict[str, object]]:
         "rate_limited_until": github.get("reconciliation", {}).get("rate_limited_until"),
     }
 
-    weather = weather_state.health_snapshot(settings)
+    weather = weather_state.health_snapshot(
+        settings,
+        configured=settings.provider_configuration()["weather"]
+        or bool(snapshots["weather"].get("configured")),
+    )
     generic_weather = snapshots["weather"]
     weather_status = str(generic_weather.get("status", "unknown"))
     if weather_status not in {

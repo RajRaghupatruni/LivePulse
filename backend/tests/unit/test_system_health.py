@@ -26,7 +26,7 @@ def test_application_boots_with_no_provider_credentials(
     with TestClient(routes.app, base_url="http://localhost") as client:
         assert client.get("/health/live").json() == {"status": "live"}
         registry = routes.app.state.provider_registry
-        assert registry.poll_sources == ()
+        assert tuple(source.provider_id for source in registry.poll_sources) == ("weather",)
         assert registry.command_target("spotify") is not None
         assert client.get("/api/v1/football/fixtures").status_code == 200
         assert client.post("/api/v1/webhooks/github", content=b"{}").status_code == 401

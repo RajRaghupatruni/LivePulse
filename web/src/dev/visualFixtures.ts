@@ -72,12 +72,25 @@ const mail: GmailInbox = { status: 'ready', configured: true, messages: [
   { message_id: 'mail-4', thread_id: 'thread-4', sender: 'GitHub', subject: 'Weekly security digest', received_at: now(), snippet: 'Your repositories have no new security advisories.', is_unread: false, is_important: false },
 ] }
 
+const fixtureWeatherLocation = {
+  id: 'visual-new-york',
+  display_name: 'New York, New York, United States',
+  city: 'New York',
+  region: 'New York',
+  country: 'United States',
+  latitude: 40.7128,
+  longitude: -74.006,
+  timezone: 'America/New_York',
+  selected_at: null,
+  last_used_at: null,
+}
+
 export function createVisualFixture(name: VisualFixtureName): VisualFixture {
   const base: VisualFixture = {
     live: emptyLive, timeline: [], connection: 'LIVE', eventArrival: null, health: health(),
     football: { value: football('healthy'), loading: false, available: true },
     spotify: { value: spotifyIdle, loading: false, available: true },
-    weather: { value: { current: { observed_at: now(), local_time: now(), timezone: 'America/New_York', temperature_f: 64, apparent_temperature_f: 64, weather_code: 2, category: 'clear', description: 'Partly cloudy', precipitation_in: 0, wind_speed_mph: 5, high_f: 69, low_f: 54, precipitation_probability_max_pct: 8 }, fetched_at: now(), health: provider('weather') }, loading: false, available: true },
+    weather: { value: { location: fixtureWeatherLocation, recent_locations: [fixtureWeatherLocation], current: { observed_at: now(), local_time: now(), timezone: 'America/New_York', temperature_f: 64, apparent_temperature_f: 64, weather_code: 2, category: 'clear', description: 'Partly cloudy', precipitation_in: 0, wind_speed_mph: 5, high_f: 69, low_f: 54, precipitation_probability_max_pct: 8 }, fetched_at: now(), health: provider('weather') }, loading: false, available: true },
     gmail: { value: mail, loading: false, available: true },
   }
   if (name === 'spotify-playing') base.spotify = { value: spotifyPlaying, loading: false, available: true }

@@ -102,11 +102,22 @@ class ProviderHealthRegistry:
             self._states[provider] = state
             return state
 
-    def success(self, provider: str, *, observed: bool = False) -> ProviderHealth:
+    def success(
+        self, provider: str, *, observed: bool = False, configured: bool = True
+    ) -> ProviderHealth:
+        if not configured:
+            return self.report(
+                provider,
+                "disconnected",
+                "configuration_missing",
+                configured=False,
+                observed=False,
+            )
         return self.report(
             provider,
             "healthy",
             "poll_succeeded" if observed else "check_succeeded",
+            configured=True,
             succeeded=True,
             observed=observed,
         )

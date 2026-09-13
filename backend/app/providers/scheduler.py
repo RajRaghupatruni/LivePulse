@@ -93,6 +93,9 @@ class PollScheduler:
         self._clock = clock
         self._stop = asyncio.Event()
         self._tasks: tuple[asyncio.Task[None], ...] = ()
+        self._source_locks = {
+            source.provider_id: asyncio.Lock() for source in self._sources
+        }
 
     async def run(self) -> None:
         if self._tasks:
@@ -120,6 +123,41 @@ class PollScheduler:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def poll_now(self, provider_id: str) -> Sequence[Observation[BaseModel]]:
+        """Run one bounded poll through the same observation/persistence path."""
+        source = next((item for item in self._sources if item.provider_id == provider_id), None)
+        if source is None:
+            raise KeyError(provider_id)
+        context = PollContext(correlation_id=uuid7(), scheduled_at=self._clock())
+        try:
+            async with self._limit:
+                observations = await asyncio.wait_for(
+                    self._observe_and_handle(source, context),
+                    timeout=source.schedule.timeout.total_seconds(),
+                )
+        except RetryAfterError as exc:
+            self._health.rate_limited(provider_id, exc.detail_code, exc.retry_after)
+            raise
+        except TimeoutError:
+            self._health.failure(provider_id, "poll_timeout")
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            detail_code = _safe_error_code(getattr(exc, "detail_code", "poll_failed"))
+            self._health.failure(
+                provider_id,
+                detail_code,
+                immediate_unavailable=bool(getattr(exc, "permanent", False)),
+            )
+            raise
+        self._health.success(
+            provider_id,
+            observed=bool(observations),
+            configured=bool(getattr(source, "configured", True)),
+        )
+        return observations
+
     async def _run_source(self, source: PollSource) -> None:
         try:
             await self._run_source_until_stop(source)
@@ -140,7 +178,11 @@ class PollScheduler:
                         self._observe_and_handle(source, context),
                         timeout=source.schedule.timeout.total_seconds(),
                     )
-                self._health.success(source.provider_id, observed=bool(observations))
+                    self._health.success(
+                        source.provider_id,
+                        observed=bool(observations),
+                        configured=bool(getattr(source, "configured", True)),
+                    )
                 failures = 0
             except asyncio.CancelledError:
                 if self._stop.is_set():
@@ -215,10 +257,11 @@ class PollScheduler:
     async def _observe_and_handle(
         self, source: PollSource, context: PollContext
     ) -> Sequence[Observation[BaseModel]]:
-        observations = await source.observe(context=context)
-        if observations:
-            await self._observation_handler(source.provider_id, observations, context)
-        return observations
+        async with self._source_locks[source.provider_id]:
+            observations = await source.observe(context=context)
+            if observations:
+                await self._observation_handler(source.provider_id, observations, context)
+            return observations
 
 
 def _safe_error_code(value: object) -> str:

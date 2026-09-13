@@ -139,10 +139,10 @@ GitHub-hosted CI was not dispatched during this integration pass.
 
 - PERSONAL_LOCAL remains single-user and has no conventional account authentication. Its intended boundary is loopback/local-machine isolation; it must not be exposed directly to an untrusted network.
 - Provider scheduler, health, and OAuth refresh serialization are single-instance/in-process. Multi-instance coordination and distributed quota limiting remain future work.
-- Live account/API behavior has not been exercised; operators must configure API-Football, Spotify OAuth plus Premium authorization, GitHub owner/token/webhook secret, Gmail OAuth consent, and local weather coordinates/timezone as applicable.
+- Live account/API behavior has not been exercised; operators must configure API-Football, Spotify OAuth plus Premium authorization, GitHub owner/token/webhook secret, and Gmail OAuth consent. Weather uses a persisted UI selection; legacy coordinates/timezone are optional first-run bootstrap only.
 - Gmail message bodies are not stored; bounded sender/subject/snippet metadata is retained. Production encryption-key rotation/recovery is future work.
 - A process kill between broker acknowledgement and the outbox `published_at` update is not fault-injected. At-least-once retry and projector idempotency handle duplicate publication.
-- M4 AI, provider-specific UI, distributed scheduling, production metrics/tracing, load tests, Terraform, and the adaptive command-center redesign remain out of scope.
+- At the M3 closure, M4 AI, provider-specific UI, distributed scheduling, production metrics/tracing, load tests, Terraform, and the adaptive command-center redesign remained out of scope. The final UI milestone and selectable-weather extension below supersede the UI-status items; the remaining engineering items are still future work.
 
 ## Final P0 security, privacy, and runtime-mode closure
 
@@ -176,6 +176,7 @@ This acceptance section records the final React UI milestone on `codex/final-ui`
 | Spotify playback surface | **Verified** — playback/art/track/progress/device and supported controls are rendered from backend state; controls use backend-confirmed results and remain disabled or truthful when no authorized playback session is available |
 | Focus Timer and Focus posture | **Verified** — 25/50/90 minute sessions, pause/resume/end, preference restoration, quieted peripheral emphasis, and critical-alert visibility are implemented; all three presets and lifecycle controls were exercised in the browser |
 | System Pulse and backend lifecycle | **Verified** — local infrastructure/realtime and provider freshness expand from the header instrument; startup, ready, unavailable, reconnect, and recovery are separate; a failed health endpoint is shown unavailable even when a shell lifecycle snapshot says ready |
+| Selectable weather location | **Verified by unit/component tests and migration checks** — Open-Meteo search, durable selection/five recents, shared-scheduler refresh, selected-place atmosphere, and a system-local dashboard clock; Docker-based runtime inspection of the new UI was unavailable in this session |
 | Single-window interactions | **Verified** — Home/Timeline/Focus/Settings, football details, Gmail details, command palette, Escape dismissal, and local destination setup stay in one LivePulse window; only intentional destination launches use the external-launch service |
 | Shell-agnostic platform boundary | **Verified** — `web/src/lib/platform.ts` centralizes external launching, authorization entry, fullscreen, API/WebSocket URL selection, backend lifecycle observation, and preferences; native APIs are absent from React components |
 | Reduced motion, keyboard, focus, and semantics | **Verified by component tests, accessibility-tree inspection, and reduced-motion styles** — semantic controls, dialog roles and focus handling, visible focus tokens, keyboard navigation, Escape handling, and reduced-motion transitions are present |
@@ -195,3 +196,18 @@ Final validation for this checkout:
 - Backend: Ruff and `compileall` passed; the default suite reported **140 passed, 12 skipped**, and the opt-in PostgreSQL/Redpanda integration suite reported **12 passed**. Migration `0005_dominant_focus` is current and `alembic check` reported no pending operations.
 - Runtime: `docker compose up --build -d --wait` completed with PostgreSQL, Redpanda, API, and web healthy. The actual browser route reported backend ready and realtime live. Optional providers were truthfully unconfigured because this validation did not use live provider credentials or accounts.
 - Visual/runtime review: the locked 1920×1080 and 1080×1920 compositions were inspected along with 1600×900, 1440×900, and 1366×768; no horizontal overflow was observed. Development fixture interactions and core keyboard/dialog flows were exercised without launching external applications or mutating provider data.
+
+## Selectable weather location extension
+
+Weather now has a compact header location selector backed by Open-Meteo geocoding. Selection and five recent places persist in PostgreSQL; the existing poll source reads the active selection and performs a prompt refresh through the shared scheduler. Per-location weather snapshots and event baselines preserve the existing canonical event/outbox path and prevent cross-city comparisons. The atmosphere uses observed weather categories and the selected place's local time, while the dashboard clock remains tied to the system. Legacy coordinate/timezone environment values are first-run bootstrap fallback only; when they are absent, the UI offers a clear location-selection state. The physical place name always comes from geocoding.
+
+The focused unit/component checks cover geocoding normalization and caching, selected/recent persistence, location switching, suppression of a browsing-only event, selected-timezone atmosphere, selector errors, and location-matched weather display.
+
+Validation for this extension:
+
+- `python -m ruff check app tests alembic` — passed; `python -m pytest -q -p no:cacheprovider` — **146 passed, 12 skipped**.
+- `$env:LIVEPULSE_INTEGRATION='1'; python -m pytest -q -p no:cacheprovider tests/integration/test_event_pipeline.py::test_provider_observations_reach_timeline_through_outbox_and_redpanda` — **1 passed**, including weather event/outbox/timeline delivery and location-selection restoration.
+- The complete opt-in integration suite reported **9 passed, 3 failed**. The failures are projector scenarios that saw events already processed by the separate live PERSONAL_LOCAL API/projector (confirmed through `/health/live` and system health); the local API was left running, so this suite was not isolated. `docker compose ps` could not connect to the Docker Desktop engine from this session. No provider or projector code was changed to hide those failures.
+- `python -m alembic upgrade head`, `python -m alembic current`, and `python -m alembic check` — passed; revision `0006_weather_locations` is current and there is no model drift.
+- `npm test -- --run` — **37 passed across 11 files**; `npm run lint` and `npm run build` passed. `docker compose config --quiet` passed.
+- `.env.example` retains blank weather coordinate/timezone placeholders. No live provider credentials or location values were added to the repository.

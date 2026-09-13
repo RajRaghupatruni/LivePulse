@@ -3,6 +3,7 @@ import { useReducedMotion } from 'framer-motion'
 import { Activity, Focus, Home, Radio, Settings2, Waves } from 'lucide-react'
 import { AmbientHeader } from '../features/environment/AmbientHeader'
 import { SpatialEnvironment } from '../features/environment/SpatialEnvironment'
+import { weatherAtmosphere, weatherTimeOfDay } from '../features/environment/weatherAtmosphere'
 import { FocusTimer } from '../features/focus/FocusTimer'
 import { useFocusTimerSnapshot } from '../features/focus/focusTimerStore'
 import { MatchStage } from '../features/match/MatchStage'
@@ -14,6 +15,7 @@ import { LaunchDestinationSettings } from '../features/command/LaunchDestination
 import { useLivePulse } from '../hooks/useLivePulse'
 import { useProviderSurfaces } from '../hooks/useProviderSurfaces'
 import { useSystemHealth } from '../hooks/useSystemHealth'
+import { useWeatherLocation } from '../hooks/useWeatherLocation'
 import { consumeWakeSequence, requestFullscreen } from '../lib/platform'
 import type { VisualFixture, VisualFixtureName } from '../dev/visualFixtures'
 
@@ -24,18 +26,11 @@ const navigation: Array<{ id: AppView; label: string; icon: typeof Home }> = [
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ]
 
-function localDayPhase() {
-  const hour = new Date().getHours()
-  if (hour >= 6 && hour < 10) return 'dawn'
-  if (hour >= 10 && hour < 17) return 'day'
-  if (hour >= 17 && hour < 20) return 'dusk'
-  return 'night'
-}
-
 export default function App() {
   const { live, timeline, connection, eventArrival, loadOlder, hasOlder, loadingOlder, refresh } = useLivePulse()
   const { health, requestState, refresh: refreshHealth } = useSystemHealth()
   const surfaces = useProviderSurfaces(health?.runtime_mode === 'PERSONAL_LOCAL')
+  const weatherLocation = useWeatherLocation(health?.runtime_mode === 'PERSONAL_LOCAL')
   const timer = useFocusTimerSnapshot()
   const reducedMotion = useReducedMotion()
   const [view, setView] = useState<AppView>('home')
@@ -43,7 +38,7 @@ export default function App() {
   const [timelineHistory, setTimelineHistory] = useState(false)
   const [gmailExpanded, setGmailExpanded] = useState(false)
   const [wake, setWake] = useState(consumeWakeSequence)
-  const [dayPhase, setDayPhase] = useState(localDayPhase)
+  const [dayPhase, setDayPhase] = useState(() => weatherTimeOfDay(null))
   const [visualName, setVisualName] = useState<'real' | VisualFixtureName>('real')
   const [visualFixture, setVisualFixture] = useState<VisualFixture | null>(null)
 
@@ -54,10 +49,6 @@ export default function App() {
     setVisualFixture(createVisualFixture(name))
   }, [])
 
-  useEffect(() => {
-    const updatePeriod = window.setInterval(() => setDayPhase(localDayPhase()), 60_000)
-    return () => window.clearInterval(updatePeriod)
-  }, [])
   useEffect(() => {
     if (!wake) return
     const timeout = window.setTimeout(() => setWake(false), 1950)
@@ -95,10 +86,23 @@ export default function App() {
     weather: visualFixture?.weather ?? surfaces.weather,
     gmail: visualFixture?.gmail,
   }
+  const snapshotLocation = shownSurfaces.weather.value?.location ?? null
+  const selectedWeatherLocation = weatherLocation.state.selected ?? snapshotLocation
+  const weatherSnapshotMatchesSelection = !weatherLocation.state.selected
+    || snapshotLocation?.id === weatherLocation.state.selected.id
+  const weather = weatherSnapshotMatchesSelection
+    ? shownSurfaces.weather.value?.current
+    : null
+  const weatherTimezone = selectedWeatherLocation?.timezone ?? null
+  useEffect(() => {
+    const updatePeriod = () => setDayPhase(weatherTimeOfDay(weatherTimezone))
+    updatePeriod()
+    const timer = window.setInterval(updatePeriod, 60_000)
+    return () => window.clearInterval(timer)
+  }, [weatherTimezone])
   const visibleTimer = visualFixture?.focusTimer ?? timer
   const focused = visibleTimer.status === 'running' || visibleTimer.status === 'paused'
   const focusLabel = focused ? `FOCUS SESSION · ${visibleTimer.durationMinutes} MIN · ${visibleTimer.status.toUpperCase()}` : null
-  const weather = shownSurfaces.weather.value?.current
   const fixtureSet = shownSurfaces.football.value
   const hasUpcoming = [...(fixtureSet?.today ?? []), ...(fixtureSet?.upcoming ?? [])].some((fixture) => Date.parse(fixture.kickoff_at) > Date.now())
   const matchMode = shownLive.match && ['live', 'halftime'].includes(shownLive.match.status) ? shownLive.focus.match_mode
@@ -113,7 +117,7 @@ export default function App() {
     attention: dominantPriority,
     connection: shownConnection,
     eventType: shownEventArrival?.event_type ?? null,
-    weather: weather?.category ?? '',
+    weather: weatherAtmosphere(weather?.category),
     spotifyPlaying: shownSurfaces.spotify.value?.playback?.is_playing ?? false,
   }), [matchMode, degraded, focused, dominantPriority, shownConnection, shownEventArrival?.event_type, weather?.category, shownSurfaces.spotify.value?.playback?.is_playing])
 
@@ -139,7 +143,21 @@ export default function App() {
         <span className="nav-rail-bottom" aria-hidden="true"><i /></span>
       </nav>
       <div className="app-content" id="workspace">
-        <AmbientHeader health={shownHealth} requestState={requestState} connection={shownConnection} weather={shownSurfaces.weather} onToggleFullscreen={() => void requestFullscreen()} />
+        <AmbientHeader
+          health={shownHealth}
+          requestState={requestState}
+          connection={shownConnection}
+          weather={shownSurfaces.weather}
+          onToggleFullscreen={() => void requestFullscreen()}
+          weatherLocation={weatherLocation.state}
+          weatherLocationLoading={weatherLocation.loading}
+          weatherSearchResults={weatherLocation.searchResults}
+          weatherSearching={weatherLocation.searching}
+          weatherSelecting={weatherLocation.selecting}
+          weatherLocationError={weatherLocation.error}
+          onWeatherSearch={weatherLocation.search}
+          onWeatherSelect={weatherLocation.select}
+        />
         <section className="workspace-intro" aria-label="LivePulse status">
           <div className="intro-copy"><span className="intro-eyebrow"><span className="intro-pulse" />{focusLabel ?? (shownLive.dominant_focus ? `CURRENT SIGNAL · ${shownLive.dominant_focus.domain.toUpperCase()}` : 'PERSONAL OPERATIONS')}</span></div>
           <div className="intro-right"><strong><Radio size={15} aria-hidden="true" />{shownConnection === 'LIVE' ? 'Realtime connected' : shownConnection === 'RESYNCING' ? 'Reconciling recent state' : shownConnection === 'RECONNECTING' ? 'Realtime reconnecting' : shownConnection === 'DEGRADED' ? 'Realtime unavailable' : 'Establishing realtime'}</strong></div>
