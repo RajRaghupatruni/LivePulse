@@ -75,7 +75,9 @@ class OutboxMessageRow(Base):
     __tablename__ = "outbox_messages"
     __table_args__ = (Index("ix_outbox_pending", "published_at", "created_at"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
     event_id: Mapped[UUID] = mapped_column(
         ForeignKey("canonical_events.event_id", ondelete="CASCADE"), unique=True
     )
@@ -115,7 +117,9 @@ class PulseTimelineRow(Base):
     __tablename__ = "pulse_timeline"
     __table_args__ = (Index("ix_pulse_timeline_cursor", "cursor"),)
 
-    cursor: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    cursor: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
     event_id: Mapped[UUID] = mapped_column(
         ForeignKey("canonical_events.event_id", ondelete="CASCADE"), unique=True
     )

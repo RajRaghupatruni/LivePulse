@@ -31,6 +31,13 @@ from app.core.logging import configure_logging
 from app.domain.focus import focus_for_match
 from app.outbox.publisher import run_publisher
 from app.projections.projector import run_projector
+from app.providers.base import PollContext
+from app.providers.gmail.models import GmailSyncBatch
+from app.providers.gmail.oauth import encryption_key_configured, install_oauth_access_log_filter
+from app.providers.gmail.router import router as gmail_oauth_router
+from app.providers.gmail.sync import GmailSyncSource, ingest_gmail_observations
+from app.providers.observations import Observation
+from app.providers.scheduler import PollScheduler
 from app.providers.status import provider_health
 from app.realtime.manager import realtime
 from app.simulator.comeback import activate_match, clear_demo_data, run_comeback
@@ -65,13 +72,26 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
+    install_oauth_access_log_filter()
     report_component("demo_source", "healthy", "idle")
     tasks: list[asyncio.Task[None]] = []
-    if get_settings().run_background_services:
+    settings = get_settings()
+    scheduler: PollScheduler | None = None
+    if settings.run_background_services:
         tasks = [
             asyncio.create_task(run_publisher(), name="outbox-publisher"),
             asyncio.create_task(run_projector(), name="event-projector"),
         ]
+        if settings.provider_configuration()["gmail"] and encryption_key_configured(settings):
+            scheduler = PollScheduler(
+                [GmailSyncSource(settings=settings)],
+                observation_handler=_handle_provider_observations,
+            )
+            tasks.append(asyncio.create_task(scheduler.run(), name="provider-scheduler"))
+        elif settings.provider_configuration()["gmail"]:
+            provider_health.report(
+                "gmail", "degraded", "credential_encryption_unavailable", configured=True
+            )
     yield
     global scenario_task
     if scenario_task is not None and not scenario_task.done():
@@ -85,6 +105,16 @@ async def lifespan(_app: FastAPI):
         with suppress(asyncio.CancelledError):
             await task
     await engine.dispose()
+
+
+async def _handle_provider_observations(
+    provider: str,
+    observations: list[Observation[GmailSyncBatch]] | tuple[Observation[GmailSyncBatch], ...],
+    context: PollContext,
+) -> None:
+    if provider != "gmail":
+        raise ValueError("no ingestion adapter is registered for this provider")
+    await ingest_gmail_observations(provider, observations, context)
 
 
 async def _run_demo_scenario(match_id: str, run_id: Any) -> None:
@@ -397,3 +427,4 @@ async def websocket_endpoint(websocket: WebSocket, last_cursor: int | None = Non
 
 
 app.include_router(router)
+app.include_router(gmail_oauth_router)

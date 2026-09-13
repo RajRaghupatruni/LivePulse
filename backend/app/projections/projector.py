@@ -51,7 +51,11 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
                     "phase": current_row.phase,
                     "version": current_row.version,
                 }
-            if current and event.version <= current["version"]:
+            if (
+                not event.event_type.startswith("mail.")
+                and current
+                and event.version <= current["version"]
+            ):
                 log.info(
                     "stale event ignored by projector",
                     extra={
@@ -62,44 +66,68 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
                     },
                 )
                 return False
-            next_state = reduce_match_state(current, event)
-            if current_row is None:
-                current_row = MatchStateRow(
-                    match_id=event.subject_id, **_match_state_fields(next_state)
+            if event.event_type.startswith("mail."):
+                timeline = PulseTimelineRow(
+                    event_id=event.event_id,
+                    event_type=event.event_type,
+                    source=event.source,
+                    subject_id=event.subject_id,
+                    occurred_at=event.occurred_at,
+                    payload=event.payload,
                 )
-                session.add(current_row)
+                session.add(timeline)
+                await session.flush()
+                notification = {
+                    "type": "timeline.item",
+                    "cursor": timeline.cursor,
+                    "event_id": str(event.event_id),
+                    "event_type": event.event_type,
+                    "source": event.source,
+                    "timestamp": event.occurred_at.isoformat(),
+                    "payload": event.payload,
+                }
+                # Mail events are timeline history, not match-state mutations.
+                next_state = None
             else:
-                for key, value in _match_state_fields(next_state).items():
-                    setattr(current_row, key, value)
-            timeline = PulseTimelineRow(
-                event_id=event.event_id,
-                event_type=event.event_type,
-                source=event.source,
-                subject_id=event.subject_id,
-                occurred_at=event.occurred_at,
-                payload=event.payload,
-            )
-            session.add(timeline)
-            await session.flush()
-            focus = focus_for_match(
-                str(next_state["status"]),
-                event.event_type,
-                next_state["updated_at"],  # type: ignore[arg-type]
-                source="football",
-                subject_id=event.subject_id,
-            )
-            notification = {
-                "type": "timeline.item",
-                "cursor": timeline.cursor,
-                "event_id": str(event.event_id),
-                "event_type": event.event_type,
-                "source": event.source,
-                "timestamp": event.occurred_at.isoformat(),
-                "payload": event.payload,
-                "attention": focus.score,
-                "focus": focus.model_dump(mode="json"),
-            }
-            notification["state"] = _public_state(next_state)
+                next_state = reduce_match_state(current, event)
+            if not event.event_type.startswith("mail."):
+                if current_row is None:
+                    current_row = MatchStateRow(
+                        match_id=event.subject_id, **_match_state_fields(next_state)
+                    )
+                    session.add(current_row)
+                else:
+                    for key, value in _match_state_fields(next_state).items():
+                        setattr(current_row, key, value)
+                timeline = PulseTimelineRow(
+                    event_id=event.event_id,
+                    event_type=event.event_type,
+                    source=event.source,
+                    subject_id=event.subject_id,
+                    occurred_at=event.occurred_at,
+                    payload=event.payload,
+                )
+                session.add(timeline)
+                await session.flush()
+                focus = focus_for_match(
+                    str(next_state["status"]),
+                    event.event_type,
+                    next_state["updated_at"],  # type: ignore[index,arg-type]
+                    source="football",
+                    subject_id=event.subject_id,
+                )
+                notification = {
+                    "type": "timeline.item",
+                    "cursor": timeline.cursor,
+                    "event_id": str(event.event_id),
+                    "event_type": event.event_type,
+                    "source": event.source,
+                    "timestamp": event.occurred_at.isoformat(),
+                    "payload": event.payload,
+                    "attention": focus.score,
+                    "focus": focus.model_dump(mode="json"),
+                }
+                notification["state"] = _public_state(next_state)  # type: ignore[arg-type]
     if notification:
         await realtime.publish(notification)
         log.info(

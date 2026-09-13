@@ -22,6 +22,7 @@ class ProviderHealth(BaseModel):
     last_success_at: datetime | None = None
     last_failure_at: datetime | None = None
     last_observation_at: datetime | None = None
+    last_message_observation_at: datetime | None = None
     consecutive_failures: int = Field(default=0, ge=0)
     rate_limited_until: datetime | None = None
     detail_code: str = Field(pattern=r"^[a-z0-9_.-]{1,64}$")
@@ -31,6 +32,7 @@ class ProviderHealth(BaseModel):
         "last_success_at",
         "last_failure_at",
         "last_observation_at",
+        "last_message_observation_at",
         "rate_limited_until",
     )
     @classmethod
@@ -60,6 +62,7 @@ class ProviderHealthRegistry:
         observed: bool = False,
         failed: bool = False,
         rate_limited_until: datetime | None = None,
+        last_message_observation_at: datetime | None = None,
     ) -> ProviderHealth:
         now = datetime.now(UTC)
         with self._lock:
@@ -77,6 +80,9 @@ class ProviderHealthRegistry:
                 last_observation_at=now
                 if observed
                 else (previous.last_observation_at if previous else None),
+                last_message_observation_at=last_message_observation_at
+                if last_message_observation_at is not None
+                else (previous.last_message_observation_at if previous else None),
                 consecutive_failures=failure_count,
                 rate_limited_until=rate_limited_until,
                 detail_code=detail_code,
