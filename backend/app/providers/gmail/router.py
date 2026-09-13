@@ -3,6 +3,7 @@
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.providers.gmail.oauth import (
@@ -12,9 +13,36 @@ from app.providers.gmail.oauth import (
 )
 from app.providers.status import provider_health
 from app.storage.database import SessionFactory
+from app.storage.models import ProviderCheckpointRow, ProviderConnectionRow
 
 router = APIRouter(prefix="/api/v1/providers/gmail/oauth", tags=["gmail-oauth"])
+connection_router = APIRouter(prefix="/api/v1/providers/gmail", tags=["gmail"])
 install_oauth_access_log_filter()
+
+
+@connection_router.delete("/connection")
+async def disconnect_gmail() -> dict[str, object]:
+    """Forget local Gmail credentials and sync cursors without deleting event history."""
+    async with SessionFactory() as session:
+        async with session.begin():
+            connection = await session.scalar(
+                select(ProviderConnectionRow).where(ProviderConnectionRow.provider == "gmail")
+            )
+            if connection is not None:
+                connection.encrypted_credentials = None
+                connection.status = "disconnected"
+                connection.scopes = []
+                connection.connected_at = None
+            await session.execute(
+                delete(ProviderCheckpointRow).where(ProviderCheckpointRow.provider == "gmail")
+            )
+    provider_health.report("gmail", "disconnected", "locally_disconnected", configured=True)
+    return {
+        "provider": "gmail",
+        "connected": False,
+        "status": "disconnected",
+        "detail_code": "locally_disconnected",
+    }
 
 
 @router.get("/start", include_in_schema=False)

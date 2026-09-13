@@ -27,14 +27,15 @@ LivePulse is a single-user personal realtime command center intended to stay ope
 | LivePulse-aware AI tools | **Not implemented** |
 | Command bar for data queries, commands, and general AI questions | **Implemented in M2 foundation**; explicit local command registry for demo/reset/health/match/close. Data queries and general AI questions remain future work |
 | WebSocket reconnect/resynchronization | **Implemented in M1 foundation**; reconnect/refetch and cursor-gap signal |
-| Security/threat model | **M3 local threat model documented**; provider-specific controls implemented, but authentication, public-demo isolation, retention controls, key rotation and production hardening remain P0 incomplete |
+| Security/threat model | **Implemented for the locked single-user/local-first thesis** — PERSONAL_LOCAL loopback trust boundary, explicit PUBLIC_DEMO isolation, provider controls, deterministic retention, and confirmed local deletion; conventional account authentication is intentionally not part of this product |
 | Structured logging | **Implemented in M1 foundation** |
 | Metrics and tracing | **Not implemented**; instrumentation boundaries established |
 | Failure tests | **Partially implemented through M2**; transaction rollback, transient publish retry, duplicate/concurrent delivery, stale versions, WebSocket recovery, consumer batch commit ordering, health normalization, and focus expiry are tested; process-kill and prolonged broker restart injection remain future work |
 | Load tests | **Not implemented** |
 | CI | **Implemented in M1 foundation** |
 | Terraform production architecture | **Not implemented** |
-| Deterministic public demo mode | **Not implemented**; local deterministic demo only |
+| Deterministic public demo mode | **Implemented in the final M3 security closure**; it requires a dedicated database/role, explicit host/origin allowlists, disables every real provider, and serves sanitized fixtures only |
+| Local data retention and user-initiated deletion | **Implemented in the final M3 security closure**; 365-day default event/timeline retention, dry-run maintenance, and confirmation-gated personal-data purge |
 
 ## Locked M3 provider contracts and status
 
@@ -69,7 +70,7 @@ M1 does not implement Spotify, Gmail, GitHub, weather, OpenAI, a real football A
 
 M2 keeps the M1 event path unchanged and adds a backend-owned structured Focus Engine, Match Mode, a desktop focus-led shell, observable local system-health state, richer timeline presentation metadata, recovery-state UX, and an explicit local command-router foundation. The system-health API reports observations and worker heartbeats, not hypothetical provider availability. The command bar does not call AI and clearly identifies unknown natural-language requests as future intelligence functionality.
 
-M3 Provider Integration delivers real backend adapters for API-Football, GitHub, Spotify, Gmail, and Open-Meteo on the shared provider foundation. Runtime wiring includes one poll scheduler, GitHub webhook ingestion, Spotify OAuth/playback/commands, Gmail OAuth and incremental read-only sync, current-weather API and meaningful-change events, provider health, and domain-aware projector behavior for the universal timeline. M3 does not add the major adaptive UI redesign or M4 AI.
+M3 Provider Integration delivers real backend adapters for API-Football, GitHub, Spotify, Gmail, and Open-Meteo on the shared provider foundation. Runtime wiring includes one poll scheduler, GitHub webhook ingestion, Spotify OAuth/playback/commands, Gmail OAuth and incremental read-only sync, current-weather API and meaningful-change events, provider health, and domain-aware projector behavior for the universal timeline. The final M3 security closure adds explicit PERSONAL_LOCAL/PUBLIC_DEMO modes, trusted-local host/origin checks, a separate sanitized demo database, retention, and confirmed local deletion. M3 does not add the major adaptive UI redesign or M4 AI.
 
 ## Product behavior requirements
 
@@ -80,6 +81,9 @@ M3 Provider Integration delivers real backend adapters for API-Football, GitHub,
 - Event history answers “what happened”; projections answer “what is true now.”
 - The browser treats WebSocket delivery as lossy and can reconstruct authoritative state from APIs.
 - The Pulse Timeline is core infrastructure and product functionality.
+- PERSONAL_LOCAL is a single-user local-first mode whose primary trust boundary is loopback isolation; it does not claim conventional user authentication or support remote multi-user access.
+- PUBLIC_DEMO must use an isolated database/role and sanitized deterministic data; personal provider credentials, checkpoints, events, and history are unavailable in that mode.
+- Personal event/timeline retention is explicit and bounded by default; the operator can preview/apply pruning and can request a confirmed full local-data purge.
 - Redis, if introduced later, cannot be the only durable copy of critical data.
 - Future AI is never authoritative application state and receives no arbitrary database/code execution privileges.
 

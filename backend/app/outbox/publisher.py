@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiokafka import AIOKafkaProducer
 from aiokafka.admin import AIOKafkaAdminClient, NewTopic
+from aiokafka.admin.config_resource import ConfigResource, ConfigResourceType
 from aiokafka.errors import TopicAlreadyExistsError
 from sqlalchemy import or_, select
 
@@ -21,11 +22,30 @@ async def ensure_topic() -> None:
     admin = AIOKafkaAdminClient(bootstrap_servers=settings.kafka_bootstrap_servers)
     try:
         await admin.start()
-        await admin.create_topics(
-            [NewTopic(name=settings.kafka_topic, num_partitions=3, replication_factor=1)]
+        try:
+            await admin.create_topics(
+                [
+                    NewTopic(
+                        name=settings.kafka_topic,
+                        num_partitions=3,
+                        replication_factor=1,
+                        topic_configs={
+                            "retention.ms": str(settings.retention_days * 24 * 60 * 60 * 1000)
+                        },
+                    )
+                ]
+            )
+        except TopicAlreadyExistsError:
+            pass
+        await admin.alter_configs(
+            [
+                ConfigResource(
+                    ConfigResourceType.TOPIC,
+                    settings.kafka_topic,
+                    configs={"retention.ms": str(settings.retention_days * 24 * 60 * 60 * 1000)},
+                )
+            ]
         )
-    except TopicAlreadyExistsError:
-        pass
     finally:
         try:
             await admin.close()

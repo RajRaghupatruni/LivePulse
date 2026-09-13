@@ -81,9 +81,7 @@ class FootballPollSource:
             await actual_store.put_json("quota:daily", snapshot, observed_at=clock())
             football_fixture_service.quota = snapshot
 
-        budget = DailyRequestBudget(
-            persist=persist_quota
-        )
+        budget = DailyRequestBudget(persist=persist_quota)
         api = FootballApiClient(api_key, budget=budget, transport=transport)
         return cls(api, store=actual_store, clock=clock)
 
@@ -109,8 +107,7 @@ class FootballPollSource:
         if int(quota["requests_remaining"]) <= self.api.budget.safety_reserve:
             decision = CadenceDecision(
                 max(
-                    self.api.budget.next_reset(now=context.scheduled_at)
-                    - context.scheduled_at,
+                    self.api.budget.next_reset(now=context.scheduled_at) - context.scheduled_at,
                     timedelta(seconds=1),
                 ),
                 "daily_budget_exhausted",
@@ -190,9 +187,7 @@ class FootballPollSource:
             live_records = await self.api.live_fixtures(list(self._catalog.values()))
             normalized_live = self._normalize_records(live_records)
             live_ids = {record.fixture.id for record in live_records}
-            details_ids = {
-                record.fixture.id for record in live_records if record.events is None
-            }
+            details_ids = {record.fixture.id for record in live_records if record.events is None}
             details_ids.update(
                 fixture.fixture_id
                 for fixture in by_id.values()
@@ -212,9 +207,7 @@ class FootballPollSource:
                     normalized_live,
                     self._normalize_records(list(details_by_id.values())),
                 )
-            self._last_live_request_cost = max(
-                1, self.api.budget.requests_used - before_live_query
-            )
+            self._last_live_request_cost = max(1, self.api.budget.requests_used - before_live_query)
             by_id.update({fixture.fixture_id: fixture for fixture in normalized_live})
             updated_dates.update(fixture.kickoff_at.date() for fixture in normalized_live)
 
@@ -360,9 +353,7 @@ class FootballPollSource:
         return results
 
     @staticmethod
-    def _should_poll_live(
-        fixtures: tuple[FootballFixtureObservation, ...], now: datetime
-    ) -> bool:
+    def _should_poll_live(fixtures: tuple[FootballFixtureObservation, ...], now: datetime) -> bool:
         for fixture in fixtures:
             if fixture.status_code in {"1H", "HT", "2H", "ET", "BT", "P", "LIVE"}:
                 return True

@@ -87,8 +87,7 @@ async def test_api_fixture_observation_uses_m1_event_and_outbox_persistence() ->
         )
         assert observations
         assert any(
-            item.content.fixture_id == fixture_id and item.content.events
-            for item in observations
+            item.content.fixture_id == fixture_id and item.content.events for item in observations
         )
 
         # This is the production ingestion method: it calls persist_event_and_outbox
@@ -120,16 +119,12 @@ async def test_api_fixture_observation_uses_m1_event_and_outbox_persistence() ->
         async with SessionFactory() as session:
             events = list(
                 await session.scalars(
-                    select(CanonicalEventRow).where(
-                        CanonicalEventRow.subject_id == subject_ids[0]
-                    )
+                    select(CanonicalEventRow).where(CanonicalEventRow.subject_id == subject_ids[0])
                 )
             )
             outbox = list(
                 await session.scalars(
-                    select(OutboxMessageRow).where(
-                        OutboxMessageRow.partition_key == subject_ids[0]
-                    )
+                    select(OutboxMessageRow).where(OutboxMessageRow.partition_key == subject_ids[0])
                 )
             )
             checkpoint = await session.scalar(

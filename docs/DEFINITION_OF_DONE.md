@@ -115,14 +115,14 @@ M3 integrates real backend adapters while preserving the M1/M2 event and recover
 | Non-football domains share a timeline-only projection path | **Verified** — mixed PostgreSQL/Redpanda test for football, Spotify, GitHub, Gmail, weather, duplicates, replay, active match preservation, and non-football match-state isolation |
 | Late events and at-least-once delivery do not regress authoritative state | **Verified** — projector/reducer regression tests; consumer commits only after durable projection |
 | Zero-provider-credential startup and coherent health | **Verified** — startup test and Compose runtime health endpoint show optional providers disconnected without preventing readiness |
-| Security and privacy boundaries documented and tested | **Verified with known gaps** — scopes, encryption, state/signature validation, dedupe, bounded Gmail metadata, log redaction, fixed repo list, and secret-free health audited; see `SECURITY_AND_PRIVACY.md` |
+| Security and privacy boundaries documented and tested | **Verified for the locked single-user/local-first scope** — PERSONAL_LOCAL loopback trust boundary, PUBLIC_DEMO isolation, provider security checks, retention, and confirmation-gated purge are covered by tests and `SECURITY_AND_PRIVACY.md` |
 | Database migrations and provider checkpoints | **Verified** — upgrade/current/check pass; Gmail expired-history recovery and atomic checkpoint tests pass |
 | Backend and frontend validation | **Verified after final validation run below** — results recorded before commit |
 | No M4 AI or major UI redesign added | **Verified** — frontend changes are limited to provider health typing and deterministic mixed-timeline ordering |
 
-## M3 validation record
+## M3 integration validation record (before final P0 closure)
 
-Final local validation on 2026-09-12/13 used Python 3.13, PostgreSQL 16, Redpanda, Node 22, and npm. External provider HTTP was mocked; no live provider credentials or accounts were used.
+The initial M3 provider-integration validation on 2026-09-12/13 used Python 3.13, PostgreSQL 16, Redpanda, Node 22, and npm. External provider HTTP was mocked; no live provider credentials or accounts were used. The final P0 security/privacy closure validation below supersedes its security, migration, and suite-count details.
 
 - `python -m ruff check app tests alembic` — passed.
 - `python -m compileall -q app tests alembic` — passed.
@@ -135,11 +135,28 @@ Final local validation on 2026-09-12/13 used Python 3.13, PostgreSQL 16, Redpand
 
 GitHub-hosted CI was not dispatched during this integration pass.
 
-## M3 remaining P0 work and limitations
+## M3 limitations and future work
 
-- The app remains single-user/local and has no authentication, authorization, public-demo isolation, retention/deletion UI, production key rotation/recovery, or public deployment hardening. M3 is **not safe to expose to an untrusted network**. The locked deterministic public demo must use synthetic data only and is not implemented. This is explicitly P0-incomplete.
+- PERSONAL_LOCAL remains single-user and has no conventional account authentication. Its intended boundary is loopback/local-machine isolation; it must not be exposed directly to an untrusted network.
 - Provider scheduler, health, and OAuth refresh serialization are single-instance/in-process. Multi-instance coordination and distributed quota limiting remain future work.
 - Live account/API behavior has not been exercised; operators must configure API-Football, Spotify OAuth plus Premium authorization, GitHub owner/token/webhook secret, Gmail OAuth consent, and local weather coordinates/timezone as applicable.
-- Canonical events and timeline data have no automatic retention policy. Gmail message bodies are not stored; bounded sender/subject/snippet metadata is retained.
+- Gmail message bodies are not stored; bounded sender/subject/snippet metadata is retained. Production encryption-key rotation/recovery is future work.
 - A process kill between broker acknowledgement and the outbox `published_at` update is not fault-injected. At-least-once retry and projector idempotency handle duplicate publication.
 - M4 AI, provider-specific UI, distributed scheduling, production metrics/tracing, load tests, Terraform, and the adaptive command-center redesign remain out of scope.
+
+## Final P0 security, privacy, and runtime-mode closure
+
+The final closure is implemented on `codex/m3-integration`. It adds explicit PERSONAL_LOCAL and PUBLIC_DEMO modes, loopback/exact Host and Origin checks (including WebSockets), a separately configured demo database and provider-disabled demo runtime, deterministic 365-day default history retention, and an explicit-confirmation local personal-data purge. No conventional user login or multi-user boundary is claimed. The PUBLIC_DEMO Compose profile uses separate PostgreSQL/Redpanda services and loopback-published ports. See `SECURITY_AND_PRIVACY.md` and ADR 0011 for the exact contract.
+
+Final local validation on 2026-09-13 used Python 3.13, PostgreSQL 16, Redpanda, Node 22, and npm. No live provider credentials or accounts were used.
+
+- `python -m ruff check app tests alembic` and `python -m compileall -q app tests alembic` — passed.
+- `python -m pytest -q -p no:cacheprovider` — **130 passed, 12 skipped**. The skips are the opt-in database/broker integration suite; two Starlette/httpx deprecation warnings remain in the test dependencies.
+- `$env:LIVEPULSE_INTEGRATION='1'; python -m pytest -q tests/integration` — **12 passed** against PostgreSQL and Redpanda, including retention invariants, confirmation-gated purge, provider disconnect behavior, fresh startup after purge, and dedupe after tombstoning.
+- `python -m alembic current` — `0004_retired_event_tombstones`; `python -m alembic check` — no new upgrade operations.
+- `docker compose config --quiet` and `docker compose -f docker-compose.public-demo.yml config --quiet` — passed. Both Compose profiles built and started with `--wait`; PostgreSQL, Redpanda, API, and web were healthy in each profile.
+- PERSONAL_LOCAL runtime probes — live/ready returned `live`/`ready`; system health was `healthy` and reported `PERSONAL_LOCAL`; all five providers were `disconnected/configured=false`. Unsupported Host returned 400 and unsupported Origin returned 403. Inspected published ports for both stacks were bound to `127.0.0.1`.
+- PUBLIC_DEMO runtime probes — health returned `PUBLIC_DEMO`; all five providers reported `disconnected/configured=false/disabled_in_public_demo`; initial private state/timeline was empty; Spotify OAuth, GitHub webhook, and football-provider paths returned 404; web returned HTTP 200. Settings and route tests confirmed realistic credential values are discarded, the dedicated demo database is selected, and state/timeline reads return only the isolated demo store.
+- `npm test -- --run` — **21 passed across 7 files**; `npm run lint` (includes typecheck), `npm run build`, and `npm audit --audit-level=low` passed with **0 vulnerabilities**.
+
+The supplied PUBLIC_DEMO Compose stack was stopped after runtime checks; its separate sanitized volume was retained. The PERSONAL_LOCAL no-credential stack remains available on loopback. Remote GitHub-hosted CI was not dispatched; local CI-equivalent validation is the release evidence.

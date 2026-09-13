@@ -29,7 +29,9 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
         async with session.begin():
             persisted = await session.get(CanonicalEventRow, event.event_id)
             if persisted is None:
-                return False  # Reset may have removed it while an old broker record was in flight.
+                # Retention/reset can remove a payload while an old broker record is in flight.
+                # A missing canonical payload must never be projected from the broker copy.
+                return False
             already = await session.get(ConsumerProcessedEventRow, (CONSUMER_NAME, event.event_id))
             if already:
                 return False
@@ -52,7 +54,7 @@ async def process_canonical_event(event: CanonicalEvent) -> bool:
                         "minute": current_row.minute,
                         "phase": current_row.phase,
                         "version": current_row.version,
-                }
+                    }
                 if current and event.version <= current["version"]:
                     log.info(
                         "stale football event recorded without changing match state",

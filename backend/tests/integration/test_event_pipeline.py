@@ -635,8 +635,7 @@ async def test_mixed_provider_timeline_and_replay_preserve_match_state() -> None
         target_counts = {event_id: 1 for event_id in event_ids}
         target_counts[duplicate_id] = 2
         while asyncio.get_running_loop().time() < deadline and any(
-            received_counts.get(event_id, 0) < count
-            for event_id, count in target_counts.items()
+            received_counts.get(event_id, 0) < count for event_id, count in target_counts.items()
         ):
             try:
                 message = await asyncio.wait_for(consumer.getone(), timeout=5)
@@ -722,9 +721,7 @@ async def test_mixed_provider_timeline_and_replay_preserve_match_state() -> None
             await replay_task
         replayed = [item for item in socket.sent if item.get("event_id") in event_ids]
         assert len(replayed) == len(events)
-        assert [item["event_id"] for item in replayed] == [
-            str(row.event_id) for row in timelines
-        ]
+        assert [item["event_id"] for item in replayed] == [str(row.event_id) for row in timelines]
         assert all(item.get("replayed") is True for item in replayed)
         assert {item.get("source") for item in replayed} == {
             "api-football",
@@ -929,12 +926,15 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                 .order_by(CanonicalEventRow.occurred_at, CanonicalEventRow.event_id)
             )
         )
-        assert await session.scalar(
-            select(ProviderCheckpointRow.id).where(
-                ProviderCheckpointRow.provider == "football",
-                ProviderCheckpointRow.checkpoint_key == football_checkpoint_key,
+        assert (
+            await session.scalar(
+                select(ProviderCheckpointRow.id).where(
+                    ProviderCheckpointRow.provider == "football",
+                    ProviderCheckpointRow.checkpoint_key == football_checkpoint_key,
+                )
             )
-        ) is not None
+            is not None
+        )
         gmail_checkpoint = await session.scalar(
             select(ProviderCheckpointRow).where(
                 ProviderCheckpointRow.provider == "gmail",
@@ -1081,7 +1081,9 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                 if cleanup_rows:
                     event_row_ids = [row.event_id for row in cleanup_rows]
                     await session.execute(
-                        delete(CanonicalEventRow).where(CanonicalEventRow.event_id.in_(event_row_ids))
+                        delete(CanonicalEventRow).where(
+                            CanonicalEventRow.event_id.in_(event_row_ids)
+                        )
                     )
                 await session.execute(
                     delete(ProviderCheckpointRow).where(
@@ -1216,9 +1218,7 @@ async def test_demo_reset_preserves_other_sources_and_allows_rerun(
                     CanonicalEventRow.subject_id.like(f"{rerun_prefix}%")
                 )
                 await session.execute(
-                    delete(MatchStateRow).where(
-                        MatchStateRow.match_id.like(f"{rerun_prefix}%")
-                    )
+                    delete(MatchStateRow).where(MatchStateRow.match_id.like(f"{rerun_prefix}%"))
                 )
                 await session.execute(
                     delete(CanonicalEventRow).where(CanonicalEventRow.event_id.in_(rerun_ids))

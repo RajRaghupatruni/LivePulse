@@ -137,9 +137,7 @@ class ProviderHealthRegistry:
                 status: ProviderStatusCode = "auth_failure"
             else:
                 status = (
-                    "unavailable"
-                    if immediate_unavailable or count >= 3
-                    else "provider_failure"
+                    "unavailable" if immediate_unavailable or count >= 3 else "provider_failure"
                 )
             return self.report(
                 provider,

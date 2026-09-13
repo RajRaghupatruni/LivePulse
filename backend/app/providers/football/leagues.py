@@ -75,11 +75,7 @@ def resolve_league_catalog(records: list[LeagueRecord]) -> dict[str, int]:
         if spec is None:
             continue
         candidates[spec.canonical_name].add(record.league.id)
-    return {
-        canonical: next(iter(ids))
-        for canonical, ids in candidates.items()
-        if len(ids) == 1
-    }
+    return {canonical: next(iter(ids)) for canonical, ids in candidates.items() if len(ids) == 1}
 
 
 def resolve_league_metadata(
@@ -97,9 +93,7 @@ def resolve_league_metadata(
                 season.year for season in record.seasons if season.current
             )
     current_seasons = {
-        canonical: next(iter(years))
-        for canonical, years in seasons.items()
-        if len(years) == 1
+        canonical: next(iter(years)) for canonical, years in seasons.items() if len(years) == 1
     }
     return catalog, current_seasons
 

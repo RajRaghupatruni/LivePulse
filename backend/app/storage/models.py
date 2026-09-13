@@ -143,6 +143,17 @@ class ConsumerProcessedEventRow(Base):
     )
 
 
+class RetiredEventRow(Base):
+    """Privacy-minimal tombstones preserve delivery/dedupe identity after retention."""
+
+    __tablename__ = "retired_events"
+    __table_args__ = (UniqueConstraint("dedupe_hash", name="uq_retired_events_dedupe_hash"),)
+
+    event_id: Mapped[UUID] = mapped_column(primary_key=True)
+    dedupe_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    retired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class DemoControlRow(Base):
     __tablename__ = "demo_control"
 

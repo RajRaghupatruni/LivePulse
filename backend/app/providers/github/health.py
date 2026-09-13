@@ -119,8 +119,10 @@ class GithubHealthTracker:
         rest_configured = self.reconciliation_configured(settings)
         rest_status = self.reconciliation_status if rest_configured else "disconnected"
         rest_detail = self.reconciliation_detail if rest_configured else "token_missing"
-        if rest_configured and self.last_reconciliation_at and (
-            current - self.last_reconciliation_at > timedelta(minutes=20)
+        if (
+            rest_configured
+            and self.last_reconciliation_at
+            and (current - self.last_reconciliation_at > timedelta(minutes=20))
         ):
             rest_status = "stale"
             rest_detail = "reconciliation_stale"
@@ -128,8 +130,10 @@ class GithubHealthTracker:
             webhook_status: HealthStatus = (
                 "healthy" if self.last_webhook_received_at else "connecting"
             )
-            webhook_detail = "webhook_delivery_verified" if self.last_webhook_received_at else (
-                "awaiting_delivery"
+            webhook_detail = (
+                "webhook_delivery_verified"
+                if self.last_webhook_received_at
+                else ("awaiting_delivery")
             )
         else:
             webhook_status = "disconnected"

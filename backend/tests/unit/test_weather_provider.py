@@ -106,9 +106,7 @@ async def test_open_meteo_client_requests_current_and_daily_fields_without_api_k
         return 200, {}, json.dumps(_payload()).encode()
 
     client = OpenMeteoClient(transport=transport)
-    result = await client.forecast(
-        latitude=12.345, longitude=-67.89, timezone="Etc/UTC"
-    )
+    result = await client.forecast(latitude=12.345, longitude=-67.89, timezone="Etc/UTC")
     assert isinstance(result, dict)
     query = parse_qs(urlparse(requested[0]).query)
     assert urlparse(requested[0]).path == "/v1/forecast"

@@ -68,9 +68,7 @@ class GithubReconciliationSource:
                 if not change.checkpoint_key or change.checkpoint_key not in checkpoints
             ]
         except asyncio.CancelledError:
-            self._health.note_reconciliation_failure(
-                "github_poll_cancelled", now=observed_at
-            )
+            self._health.note_reconciliation_failure("github_poll_cancelled", now=observed_at)
             raise
         except GithubApiError as exc:
             self._health.note_reconciliation_failure(

@@ -23,7 +23,7 @@ def test_application_boots_with_no_provider_credentials(
             return None
 
     monkeypatch.setattr(routes, "engine", FakeEngine())
-    with TestClient(routes.app) as client:
+    with TestClient(routes.app, base_url="http://localhost") as client:
         assert client.get("/health/live").json() == {"status": "live"}
         registry = routes.app.state.provider_registry
         assert registry.poll_sources == ()
@@ -44,9 +44,7 @@ def test_configured_providers_are_registered_without_startup_probes(
         api_football_key=SecretStr("football-key"),
         spotify_client_id="spotify-client",
         spotify_client_secret=SecretStr("spotify-secret"),
-        spotify_redirect_uri=(
-            "http://127.0.0.1:8000/api/v1/providers/spotify/oauth/callback"
-        ),
+        spotify_redirect_uri=("http://127.0.0.1:8000/api/v1/providers/spotify/oauth/callback"),
         github_owner="acme",
         github_token=SecretStr("github-token"),
         github_webhook_secret=SecretStr("github-webhook-secret"),
@@ -80,12 +78,14 @@ def test_configured_providers_are_registered_without_startup_probes(
 
 def test_health_aggregation_never_promotes_unknown_or_failed_dependencies() -> None:
     assert overall_status({"postgres": {"status": "unknown"}}) == "unknown"
-    assert overall_status(
-        {"postgres": {"status": "healthy"}, "projector": {"status": "degraded"}}
-    ) == "degraded"
-    assert overall_status(
-        {"postgres": {"status": "unavailable"}, "redpanda": {"status": "healthy"}}
-    ) == "unavailable"
+    assert (
+        overall_status({"postgres": {"status": "healthy"}, "projector": {"status": "degraded"}})
+        == "degraded"
+    )
+    assert (
+        overall_status({"postgres": {"status": "unavailable"}, "redpanda": {"status": "healthy"}})
+        == "unavailable"
+    )
 
 
 def test_worker_health_becomes_degraded_when_heartbeat_goes_stale() -> None:

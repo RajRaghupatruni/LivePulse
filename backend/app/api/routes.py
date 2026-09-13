@@ -26,10 +26,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from uuid6 import uuid7
 
-from app.core.config import get_settings
+from app.core.config import RuntimeMode, get_settings
 from app.core.errors import LivePulseError, livepulse_error_handler
 from app.core.health import component_snapshot, overall_status, report_component
 from app.core.logging import configure_logging
+from app.core.security import TrustedBoundaryMiddleware
 from app.domain.focus import focus_for_match
 from app.outbox.publisher import run_publisher
 from app.projections.projector import run_projector
@@ -46,6 +47,7 @@ from app.providers.github.router import router as github_router
 from app.providers.github.storage import persist_observations
 from app.providers.gmail.models import GmailSyncBatch
 from app.providers.gmail.oauth import encryption_key_configured, install_oauth_access_log_filter
+from app.providers.gmail.router import connection_router as gmail_connection_router
 from app.providers.gmail.router import router as gmail_oauth_router
 from app.providers.gmail.sync import GmailSyncSource, ingest_gmail_observations
 from app.providers.observations import Observation
@@ -103,31 +105,37 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     github_health.initialize(settings)
     provider_registry = ProviderRegistry()
-    provider_registry.register_webhook_source(github_webhook_processor)
-    provider_registry.register_command_target(spotify_provider.command_target)
+    personal_mode = settings.runtime_mode is RuntimeMode.PERSONAL_LOCAL
     football_source: FootballPollSource | None = None
-    if settings.provider_configuration()["football"]:
+    if personal_mode:
+        provider_registry.register_webhook_source(github_webhook_processor)
+        provider_registry.register_command_target(spotify_provider.command_target)
+    if personal_mode and settings.provider_configuration()["football"]:
         football_source = FootballPollSource.from_configuration(settings.api_football_key)
         if football_source is not None:
             provider_registry.register_poll_source(football_source)
             provider_health.report(
                 "football", "connecting", "awaiting_first_observation", configured=True
             )
-    if github_health.reconciliation_configured(settings):
+    if personal_mode and github_health.reconciliation_configured(settings):
         provider_registry.register_poll_source(GithubReconciliationSource(settings))
-    if is_spotify_configured(settings):
+    if personal_mode and is_spotify_configured(settings):
         provider_registry.register_poll_source(spotify_provider.poll_source)
         provider_health.report(
             "spotify", "connecting", "awaiting_first_observation", configured=True
         )
-    if settings.provider_configuration()["gmail"] and encryption_key_configured(settings):
+    if (
+        personal_mode
+        and settings.provider_configuration()["gmail"]
+        and encryption_key_configured(settings)
+    ):
         provider_registry.register_poll_source(GmailSyncSource(settings=settings))
         provider_health.report("gmail", "connecting", "awaiting_first_sync", configured=True)
-    elif settings.provider_configuration()["gmail"]:
+    elif personal_mode and settings.provider_configuration()["gmail"]:
         provider_health.report(
             "gmail", "degraded", "credential_encryption_unavailable", configured=True
         )
-    weather_source = build_weather_source(settings)
+    weather_source = build_weather_source(settings) if personal_mode else None
     if weather_source is not None:
         provider_registry.register_poll_source(weather_source)
         provider_health.report(
@@ -219,6 +227,7 @@ async def lifespan(_app: FastAPI):
             poll_scheduler = scheduler
             tasks.append(asyncio.create_task(scheduler.run(), name="provider-poll-scheduler"))
     _app.state.provider_registry = provider_registry
+    _app.state.runtime_mode = settings.runtime_mode.value
     yield
     global scenario_task
     if scenario_task is not None and not scenario_task.done():
@@ -259,10 +268,12 @@ app.include_router(football_router)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=list(get_settings().allowed_origins),
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["content-type", "x-request-id"],
+    allow_credentials=False,
 )
+app.add_middleware(TrustedBoundaryMiddleware, settings_getter=lambda: get_settings())
 app.add_exception_handler(LivePulseError, livepulse_error_handler)
 
 
@@ -384,6 +395,7 @@ async def system_health() -> dict[str, Any]:
     return {
         "status": overall_status(components),
         "checked_at": datetime.now(UTC).isoformat(),
+        "runtime_mode": get_settings().runtime_mode.value,
         "components": components,
         "providers": await _provider_health_snapshot(),
     }
@@ -391,6 +403,19 @@ async def system_health() -> dict[str, Any]:
 
 async def _provider_health_snapshot() -> dict[str, dict[str, object]]:
     settings = get_settings()
+    if settings.runtime_mode is RuntimeMode.PUBLIC_DEMO:
+        checked_at = datetime.now(UTC).isoformat()
+        return {
+            provider: {
+                "provider": provider,
+                "configured": False,
+                "connected": False,
+                "status": "disconnected",
+                "detail_code": "disabled_in_public_demo",
+                "checked_at": checked_at,
+            }
+            for provider in ("football", "spotify", "github", "gmail", "weather")
+        }
     snapshots = provider_health.snapshot(settings)
     checked_at = datetime.now(UTC).isoformat()
     if football_fixture_service.quota is not None:
@@ -675,3 +700,4 @@ app.include_router(github_router)
 app.include_router(spotify_router)
 app.include_router(weather_router)
 app.include_router(gmail_oauth_router)
+app.include_router(gmail_connection_router)

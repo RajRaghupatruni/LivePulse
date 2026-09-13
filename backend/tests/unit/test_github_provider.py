@@ -224,13 +224,16 @@ def test_github_webhook_event_mappings_and_irrelevant_action_suppression() -> No
         "developer.workflow.failed"
     )
     assert run("requested") == ()
-    assert normalize_webhook(
-        event_name="pull_request",
-        payload={"action": "synchronize", "number": 12, "pull_request": {}},
-        repository=repository,
-        delivery_id="delivery-irrelevant",
-        observed_at=NOW,
-    ) == ()
+    assert (
+        normalize_webhook(
+            event_name="pull_request",
+            payload={"action": "synchronize", "number": 12, "pull_request": {}},
+            repository=repository,
+            delivery_id="delivery-irrelevant",
+            observed_at=NOW,
+        )
+        == ()
+    )
     deployment = normalize_webhook(
         event_name="deployment_status",
         payload={

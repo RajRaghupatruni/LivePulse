@@ -47,6 +47,7 @@ services:
   backend:
     build: ./backend
     environment:
+      LIVEPULSE_MODE: ${LIVEPULSE_MODE:-PERSONAL_LOCAL}
       DATABASE_URL: postgresql+asyncpg://livepulse:livepulse@postgres:5432/livepulse
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-}
@@ -63,6 +64,7 @@ services:
       WEATHER_LONGITUDE: ${WEATHER_LONGITUDE:-}
       WEATHER_TIMEZONE: ${WEATHER_TIMEZONE:-}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
+      RETENTION_DAYS: ${RETENTION_DAYS:-365}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

@@ -31,11 +31,7 @@ def adaptive_cadence_decision(
         return CadenceDecision(timedelta(hours=12), "daily_budget_exhausted")
 
     pending_final = any(item.final_verification for item in items)
-    live = [
-        item
-        for item in items
-        if item.status_code in {"1H", "2H", "ET", "BT", "P", "LIVE"}
-    ]
+    live = [item for item in items if item.status_code in {"1H", "2H", "ET", "BT", "P", "LIVE"}]
     halftime = any(item.status_code == "HT" for item in items)
     is_live_window = bool(live or halftime)
 

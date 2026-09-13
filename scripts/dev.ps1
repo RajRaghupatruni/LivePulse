@@ -8,5 +8,5 @@ Push-Location $backend
 try {
   & (Join-Path $backend '.venv\Scripts\alembic.exe') upgrade head
   if ($LASTEXITCODE -ne 0) { throw 'Alembic migration failed.' }
-  & (Join-Path $backend '.venv\Scripts\uvicorn.exe') app.main:app --host 0.0.0.0 --port 8000
+  & (Join-Path $backend '.venv\Scripts\uvicorn.exe') app.main:app --host 127.0.0.1 --port 8000
 } finally { Pop-Location }

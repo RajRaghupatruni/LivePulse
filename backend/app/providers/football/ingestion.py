@@ -170,11 +170,15 @@ def diff_fixture(
         if classified is None or event.identity in event_ids:
             continue
         event_type, side = classified
-        if event_type in {
-            FootballEventType.GOAL,
-            FootballEventType.YELLOW_CARD,
-            FootballEventType.RED_CARD,
-        } and not side:
+        if (
+            event_type
+            in {
+                FootballEventType.GOAL,
+                FootballEventType.YELLOW_CARD,
+                FootballEventType.RED_CARD,
+            }
+            and not side
+        ):
             continue
         emit(
             event_type,
@@ -229,8 +233,7 @@ def diff_fixture(
             home_score=reported_home,
             away_score=reported_away,
             detail=(
-                "Provider score corrected from "
-                f"{aligned_score['home']}-{aligned_score['away']}"
+                f"Provider score corrected from {aligned_score['home']}-{aligned_score['away']}"
             ),
         )
 

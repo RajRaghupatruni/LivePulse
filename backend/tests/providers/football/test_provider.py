@@ -320,64 +320,42 @@ async def test_daily_quota_tracks_headers_local_fallback_and_utc_reset() -> None
 def test_adaptive_cadence_covers_idle_upcoming_live_halftime_and_quota() -> None:
     idle = make_match(status="FT", kickoff=NOW - timedelta(hours=2))
     assert adaptive_cadence([], now=NOW, quota_remaining=95) == timedelta(hours=12)
-    assert (
-        adaptive_cadence(
-            [make_match(kickoff=NOW + timedelta(hours=8))], now=NOW, quota_remaining=95
-        )
-        == timedelta(hours=3)
+    assert adaptive_cadence(
+        [make_match(kickoff=NOW + timedelta(hours=8))], now=NOW, quota_remaining=95
+    ) == timedelta(hours=3)
+    assert adaptive_cadence(
+        [make_match(kickoff=NOW + timedelta(minutes=20))], now=NOW, quota_remaining=95
+    ) == timedelta(minutes=5)
+    assert adaptive_cadence(
+        [make_match(kickoff=NOW + timedelta(minutes=4))], now=NOW, quota_remaining=95
+    ) == timedelta(seconds=150)
+    assert adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=95) == timedelta(
+        seconds=150
     )
-    assert (
-        adaptive_cadence(
-            [make_match(kickoff=NOW + timedelta(minutes=20))], now=NOW, quota_remaining=95
-        )
-        == timedelta(minutes=5)
+    assert adaptive_cadence([make_match(status="HT")], now=NOW, quota_remaining=95) == timedelta(
+        minutes=5
     )
-    assert (
-        adaptive_cadence(
-            [make_match(kickoff=NOW + timedelta(minutes=4))], now=NOW, quota_remaining=95
-        )
-        == timedelta(seconds=150)
+    assert adaptive_cadence(
+        [idle.model_copy(update={"final_verification": True})], now=NOW, quota_remaining=95
+    ) == timedelta(minutes=2)
+    assert adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=20) == timedelta(
+        minutes=5
     )
-    assert (
-        adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=95)
-        == timedelta(seconds=150)
+    assert adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=10) == timedelta(
+        minutes=10
     )
-    assert (
-        adaptive_cadence([make_match(status="HT")], now=NOW, quota_remaining=95)
-        == timedelta(minutes=5)
+    assert adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=40) == timedelta(
+        minutes=3
     )
-    assert (
-        adaptive_cadence(
-            [idle.model_copy(update={"final_verification": True})], now=NOW, quota_remaining=95
-        )
-        == timedelta(minutes=2)
-    )
-    assert (
-        adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=20)
-        == timedelta(minutes=5)
-    )
-    assert (
-        adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=10)
-        == timedelta(minutes=10)
-    )
-    assert (
-        adaptive_cadence([make_match(status="1H")], now=NOW, quota_remaining=40)
-        == timedelta(minutes=3)
-    )
-    assert (
-        adaptive_cadence(
-            [make_match(status="1H")], now=NOW, quota_remaining=95, request_cost=2
-        )
-        == timedelta(minutes=5)
-    )
+    assert adaptive_cadence(
+        [make_match(status="1H")], now=NOW, quota_remaining=95, request_cost=2
+    ) == timedelta(minutes=5)
 
 
 def test_cadence_decision_explains_live_quota_degradation_and_idle_slowdown() -> None:
     from app.providers.football.cadence import adaptive_cadence_decision
 
-    healthy = adaptive_cadence_decision(
-        [make_match(status="2H")], now=NOW, quota_remaining=80
-    )
+    healthy = adaptive_cadence_decision([make_match(status="2H")], now=NOW, quota_remaining=80)
     low = adaptive_cadence_decision([make_match(status="2H")], now=NOW, quota_remaining=14)
     idle = adaptive_cadence_decision([], now=NOW, quota_remaining=80)
 
@@ -562,9 +540,7 @@ def test_provider_health_reports_rate_limit_and_persistent_auth_failure() -> Non
     state = health.rate_limited("football", "rate_limited", cooldown)
     assert state.status == "rate_limited"
     assert state.rate_limited_until == cooldown
-    auth_failure = health.failure(
-        "football", "authentication_failed", immediate_unavailable=True
-    )
+    auth_failure = health.failure("football", "authentication_failed", immediate_unavailable=True)
     assert auth_failure.status == "auth_failure"
     assert auth_failure.consecutive_failures == 2
 

@@ -185,8 +185,7 @@ class FootballApiClient:
         self._client = httpx.AsyncClient(
             base_url=BASE_URL,
             headers={"x-apisports-key": key.strip(), "accept": "application/json"},
-            timeout=timeout
-            or httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0),
+            timeout=timeout or httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0),
             transport=transport,
         )
 
@@ -331,10 +330,7 @@ class FootballApiClient:
         async with self._request_lock:
             loop = asyncio.get_running_loop()
             if self._last_request_started is not None:
-                delay = (
-                    self._min_request_interval
-                    - (loop.time() - self._last_request_started)
-                )
+                delay = self._min_request_interval - (loop.time() - self._last_request_started)
                 if delay > 0:
                     await asyncio.sleep(delay)
             self._last_request_started = loop.time()

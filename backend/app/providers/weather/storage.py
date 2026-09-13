@@ -68,9 +68,7 @@ async def persist_weather_observation(
             )
             if event:
                 await persist_event_and_outbox(session, event)
-                await _upsert_weather_checkpoint(
-                    session, "event_baseline", serialized, observed_at
-                )
+                await _upsert_weather_checkpoint(session, "event_baseline", serialized, observed_at)
             await _upsert_weather_checkpoint(session, "current", serialized, observed_at)
     weather_state.update(current, fetched_at=observed_at)
 

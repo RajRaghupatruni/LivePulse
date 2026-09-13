@@ -17,6 +17,27 @@ Deterministic simulator or registered provider adapter
 
 The simulator only supplies provider-shaped observations to the ordinary ingestion path. Real providers normalize observations into immutable canonical events and persist those events with outbox rows. No source writes projections or timeline state directly. API, outbox publisher, projector, and the registered poll scheduler run as supervised async tasks in the backend; they remain separate components with explicit boundaries so they can be split into processes later.
 
+## Runtime modes and network boundary
+
+`LIVEPULSE_MODE` is an explicit typed setting with `PERSONAL_LOCAL` as the default and
+`PUBLIC_DEMO` as the isolated portfolio mode. In PERSONAL_LOCAL the application is a
+single-user, local-first service with no conventional account authentication. Its primary
+trust boundary is loopback isolation: the development server binds `127.0.0.1`, Docker
+publishes host ports only on `127.0.0.1`, and middleware accepts only loopback Host and
+browser Origin values. CORS is an exact localhost allowlist. The same middleware checks
+WebSocket Host/Origin before accepting a connection. Spotify and Gmail OAuth callbacks
+continue to work on their configured loopback callback hosts.
+
+PUBLIC_DEMO requires `PUBLIC_DEMO_DATABASE_URL`, an exact host allowlist, and an exact
+HTTP(S) origin allowlist. The demo database name and login role must both differ from the
+personal database values. The runtime engine and Alembic connect only to that dedicated
+target and never fall back to `DATABASE_URL`. Provider credentials and weather coordinates
+are discarded during settings validation; no real provider source, webhook, OAuth route,
+provider API, or provider command is available in this mode. The deterministic fictional
+match simulator is the only event source. The shipped demo Compose file also has its own
+PostgreSQL volume and Redpanda service, and binds every host port to loopback. The mode is
+reported by system health without exposing database URLs or provider configuration.
+
 ## Invariants
 
 1. Provider DTOs do not leak into domain models or frontend contracts.
@@ -38,7 +59,7 @@ The timeline uses a PostgreSQL-generated monotonic `BIGINT` sequence as a durabl
 
 ## Persistence and delivery
 
-An ingestion transaction inserts both a canonical event and its outbox row. The outbox publisher claims rows with `FOR UPDATE SKIP LOCKED`, commits the claim briefly, publishes to Redpanda using `subject_id` as key, then marks the row published. A crash after broker acknowledgement and before marking causes duplicate publication, which is expected. Pending rows survive restarts. Events are retained in PostgreSQL as the durable history.
+An ingestion transaction inserts both a canonical event and its outbox row. The outbox publisher claims rows with `FOR UPDATE SKIP LOCKED`, commits the claim briefly, publishes to Redpanda using `subject_id` as key, then marks the row published. A crash after broker acknowledgement and before marking causes duplicate publication, which is expected. Pending rows survive restarts. The default 365-day retention policy applies to ingested event history and timeline rows. Redpanda's canonical topic uses the same retention window. Retired-event tombstones keep only event UUID and a one-way hash of the dedupe key after payload deletion, so broker replay and provider retries remain idempotent without retaining event metadata. PostgreSQL cascades timeline, outbox, and processed-event rows with a retired canonical event; timeline cursor allocation is never reset.
 
 The projector transaction first claims event identity in `consumer_processed_events`, then routes only `football.match.*` events through the football reducer. All other canonical event families use one generalized timeline-only path and never read or mutate football `match_state`. The transaction commits idempotency, any football state update, and the timeline row together. Duplicate deliveries are ignored. Older/equal football versions remain in history but do not regress current match state. Late post-fulltime football events are timeline-only unless they are explicit score corrections. Realtime notifications are emitted only after commit. A process crash after commit but before notification is recovered by REST resynchronization and timeline cursor checks.
 
@@ -62,6 +83,10 @@ The persistent command bar has a small explicit frontend command registry for sa
 
 The response also has a `providers` map, separate from infrastructure `components`, with normalized state such as `healthy`, `degraded`, `unavailable`, `disconnected`, `connecting`, `stale`, `rate_limited`, `auth_failure`, `provider_failure`, or `resyncing`, where runtime evidence supports it. It includes configuration presence, a safe detail code, last success/failure/observation, failure count, quota/cadence information where applicable, and rate-limit expiry. Missing required config reports disconnected; configured sources report connecting until observed. Health never claims a live connection from configuration alone. Provider state does not alter infrastructure health aggregation. Secrets, tokens, message bodies, provider payloads, and personal account/location values are excluded.
 
+The health contract includes `runtime_mode`. In PUBLIC_DEMO every real provider reports
+`disconnected`, `configured=false`, and `disabled_in_public_demo`, without reading provider
+connection rows from a personal database.
+
 ## Provider integration boundary (M3)
 
 Provider packages live under `app.providers.<provider>`. Vendor DTOs and HTTP/OAuth details belong only in their provider package. The shared `Observation[ContentModel]` is immutable, UTC-stamped and typed; it carries provider/entity identity, provider version/checkpoint, and correlation ID. It is an intermediate observation, not a canonical event. Provider adapters own change detection and domain normalization, then emit the existing canonical event envelope into the unchanged PostgreSQL + outbox + Redpanda path. The M1 simulator remains on its existing normalization path.
@@ -78,9 +103,26 @@ The backend command contract currently reserves `spotify.play`, `spotify.pause`,
 
 Implemented event families include `football.match.{scheduled,kickoff,goal,score_corrected,yellow_card,red_card,substitution,halftime,second_half,fulltime}`; `spotify.playback.{started,paused,resumed}` plus `spotify.track.changed`, `spotify.device.changed`, and `spotify.context.changed`; `developer.workflow.{started,completed,failed}`, `developer.pull_request.{opened,merged}`, `developer.push.received`, and `developer.deployment.{completed,failed}`; `mail.message.received` and `mail.thread.updated`; and `weather.conditions.updated`. Weather alerts are not synthesized because the selected source does not provide a useful alert concept.
 
+## Retention and deletion
+
+`RETENTION_DAYS` defaults to 365 (bounded from 30 to 3650 days). Retention is an explicit
+deterministic maintenance command, not a background deletion loop. It removes only events
+past the ingestion-time cutoff whose outbox is published and whose projector work is
+durable. It preserves all events for an active/live match, each current match-state event,
+pending publication/projection work, provider connection records, and all checkpoints needed
+for incremental sync. Old inactive football state and its complete retired history can be
+removed together. Retired identity tombstones retain only opaque identity/hash metadata.
+
+The confirmation-gated personal purge removes canonical/timeline/outbox/idempotency history,
+retired identities, match projections, the active-match pointer, and provider checkpoints;
+it drops the mixed-domain Redpanda topic so event payloads are also removed. Encrypted
+provider connection rows are removed only when the operator explicitly requests them. The
+operator runs maintenance with API workers stopped to avoid racing live provider ingestion.
+Schema and migration history are never deleted.
+
 ## Operations and security boundaries
 
-JSON logs carry service, request/correlation ID, event ID/type, consumer identity, and categorized errors where known. Health live means process responsiveness; health ready checks PostgreSQL and broker availability. The M3 local threat model and data boundaries are recorded in `docs/SECURITY_AND_PRIVACY.md`. Compose ports bind to loopback, but the app has no user authentication, public-demo isolation, or retention UI; do not expose it to untrusted networks. No secrets are committed. No Redis or Kubernetes is used.
+JSON logs carry service, request/correlation ID, event ID/type, consumer identity, and categorized errors where known. Health live means process responsiveness; health ready checks PostgreSQL and broker availability. OAuth callback query material is stripped/redacted and `httpx` URL logging is disabled. The complete trust model and operational commands are recorded in `docs/SECURITY_AND_PRIVACY.md`. PERSONAL_LOCAL must remain loopback-only; PUBLIC_DEMO is limited to sanitized data in its isolated database and explicit host/origin allowlists. No secrets are committed. No Redis or Kubernetes is used.
 
 ## Planned instrumentation
 

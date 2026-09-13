@@ -92,15 +92,11 @@ def _normalize_event(
         "minute": elapsed,
         "extra": event.time.extra,
         "team": team_id if team_id is not None else team_name,
-        "player": (
-            event.player.id or event.player.name if event.player else None
-        ),
+        "player": (event.player.id or event.player.name if event.player else None),
     }
     if kind.casefold() != "goal":
         identity_fields["detail"] = (event.detail or "").casefold()
-        identity_fields["assist"] = (
-            event.assist.id or event.assist.name if event.assist else None
-        )
+        identity_fields["assist"] = event.assist.id or event.assist.name if event.assist else None
     identity = hashlib.sha256(
         json.dumps(identity_fields, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

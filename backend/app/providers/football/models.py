@@ -192,9 +192,7 @@ class FootballFixtureObservation(BaseModel):
     def event_time(self) -> datetime:
         """Approximate occurrence time from elapsed minute when the API has no timestamp."""
 
-        return (self.actual_kickoff_at or self.kickoff_at) + timedelta(
-            minutes=max(0, self.minute)
-        )
+        return (self.actual_kickoff_at or self.kickoff_at) + timedelta(minutes=max(0, self.minute))
 
 
 class FixtureSummary(BaseModel):

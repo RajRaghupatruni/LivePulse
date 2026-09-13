@@ -60,9 +60,9 @@ def test_focus_engine_uses_deterministic_event_priority() -> None:
     )
     assert goal.expires_at == now + timedelta(seconds=12)
     assert (red_card.score, red_card.reason, red_card.match_mode) == (95, "red_card", "highlight")
-    assert attention_for(
-        "live", "football.match.goal", now, now + timedelta(seconds=13)
-    ) == int(Attention.HIGH)
+    assert attention_for("live", "football.match.goal", now, now + timedelta(seconds=13)) == int(
+        Attention.HIGH
+    )
     settled = focus_for_match("live", "football.match.goal", now, now + timedelta(seconds=13))
     assert (settled.score, settled.reason, settled.transient, settled.match_mode) == (
         70,

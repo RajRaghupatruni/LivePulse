@@ -25,9 +25,7 @@ DAILY_FIELDS = (
     "temperature_2m_min",
     "precipitation_probability_max",
 )
-ResponseTransport = Callable[
-    [str, float], Awaitable[tuple[int, Mapping[str, str], bytes]]
-]
+ResponseTransport = Callable[[str, float], Awaitable[tuple[int, Mapping[str, str], bytes]]]
 
 
 class OpenMeteoError(RuntimeError):
@@ -145,9 +143,7 @@ def parse_forecast(payload: object, *, timezone: str, observed_at: datetime) -> 
 
 
 class OpenMeteoClient:
-    def __init__(
-        self, *, transport: ResponseTransport | None = None, timeout: float = 15
-    ) -> None:
+    def __init__(self, *, transport: ResponseTransport | None = None, timeout: float = 15) -> None:
         self._transport = transport or _urlopen_transport
         self._timeout = timeout
 

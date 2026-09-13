@@ -2,7 +2,10 @@
 
 This provider uses server-side Google OAuth Authorization Code flow and the single scope
 `https://www.googleapis.com/auth/gmail.readonly`. LivePulse never requests Gmail send, compose,
-modify, or full-mailbox access scopes. There are no Gmail mutation routes or client methods.
+modify, or full-mailbox access scopes. There are no Gmail mailbox-mutation routes or client
+methods. The local `DELETE /api/v1/providers/gmail/connection` endpoint only forgets the
+encrypted LivePulse connection and Gmail synchronization checkpoints; it does not call a
+Google mailbox mutation API or remove existing timeline history.
 
 ## Google Cloud setup
 
