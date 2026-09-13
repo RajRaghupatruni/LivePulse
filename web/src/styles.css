@@ -263,6 +263,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
 @media (max-width: 900px) { .provider-mini-strip { display: none; } }
 @media (max-width: 699px) { .visual-fixture-select { display: none; } }
 
@@ -407,3 +408,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Let landscape home content use the viewport; the hero must fill its grid row. */
+@media (min-width: 1181px) and (orientation: landscape) {
+  .app-content { height: 100vh; min-height: 0; }
+  .dashboard-composition { flex: 1 1 auto; height: auto; min-height: 0; }
+  .match-stage, .inbox-focus-rail { height: auto; align-self: stretch; }
+}

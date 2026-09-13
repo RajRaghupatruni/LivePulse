@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { MatchStage } from './MatchStage'
 import type { FootballFixtures, LiveState } from '../../types/livepulse'
@@ -83,5 +83,18 @@ describe('MatchStage', () => {
 
     expect(screen.getByRole('region', { name: /67′ · SECOND HALF: Northstar FC versus Harbor United/ })).toBeInTheDocument()
     expect(screen.getByLabelText('2 to 1')).toBeInTheDocument()
+  })
+
+  it('keeps match awareness, observation metadata, and View Match in the hero footer', () => {
+    const fixture: FootballFixtures = {
+      provider_status: 'healthy', observed_at: '2026-09-13T01:00:00Z', today: [], live: [],
+      upcoming: [{ fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'scheduled', minute: 0, home_score: null, away_score: null }],
+    }
+    render(<MatchStage live={liveState} fixtures={fixture} fixtureLoading={false} fixtureAvailable />)
+
+    const hero = screen.getByRole('region', { name: /Northstar FC versus Harbor United/ })
+    expect(within(hero).getByText('MATCH AWARENESS')).toBeVisible()
+    expect(within(hero).getByText(/^Observed /)).toBeVisible()
+    expect(within(hero).getByRole('button', { name: 'View match details' })).toBeVisible()
   })
 })
