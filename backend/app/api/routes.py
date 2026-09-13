@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -17,6 +18,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -31,6 +33,13 @@ from app.core.logging import configure_logging
 from app.domain.focus import focus_for_match
 from app.outbox.publisher import run_publisher
 from app.projections.projector import run_projector
+from app.providers.base import PollContext
+from app.providers.football.models import FootballFixtureObservation
+from app.providers.football.routes import router as football_router
+from app.providers.football.service import football_fixture_service
+from app.providers.football.source import FootballPollSource
+from app.providers.observations import Observation
+from app.providers.scheduler import PollScheduler
 from app.providers.status import provider_health
 from app.realtime.manager import realtime
 from app.simulator.comeback import activate_match, clear_demo_data, run_comeback
@@ -66,12 +75,38 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 async def lifespan(_app: FastAPI):
     configure_logging()
     report_component("demo_source", "healthy", "idle")
+    settings = get_settings()
     tasks: list[asyncio.Task[None]] = []
-    if get_settings().run_background_services:
+    football_source: FootballPollSource | None = None
+    poll_scheduler: PollScheduler | None = None
+    if settings.run_background_services:
         tasks = [
             asyncio.create_task(run_publisher(), name="outbox-publisher"),
             asyncio.create_task(run_projector(), name="event-projector"),
         ]
+        if settings.provider_configuration()["football"]:
+            football_source = FootballPollSource.from_configuration(settings.api_football_key)
+            if football_source is not None:
+
+                async def handle_football(
+                    _provider: str,
+                    observations: Sequence[Observation[BaseModel]],
+                    context: PollContext,
+                ) -> None:
+                    typed = [
+                        item
+                        for item in observations
+                        if isinstance(item.content, FootballFixtureObservation)
+                    ]
+                    if len(typed) != len(observations):
+                        raise ValueError("football source returned an unexpected observation type")
+                    await football_source.store.ingest(typed, context)
+                    await football_source.observations_persisted()
+
+                poll_scheduler = PollScheduler(
+                    [football_source], observation_handler=handle_football
+                )
+                tasks.append(asyncio.create_task(poll_scheduler.run(), name="provider-pollers"))
     yield
     global scenario_task
     if scenario_task is not None and not scenario_task.done():
@@ -79,11 +114,15 @@ async def lifespan(_app: FastAPI):
         with suppress(asyncio.CancelledError):
             await scenario_task
     scenario_task = None
+    if poll_scheduler is not None:
+        await poll_scheduler.stop()
     for task in tasks:
         task.cancel()
     for task in tasks:
         with suppress(asyncio.CancelledError):
             await task
+    if football_source is not None:
+        await football_source.close()
     await engine.dispose()
 
 
@@ -104,6 +143,7 @@ async def _run_demo_scenario(match_id: str, run_id: Any) -> None:
 
 
 app = FastAPI(title="LivePulse API", version="0.1.0", lifespan=lifespan)
+app.include_router(football_router)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -233,8 +273,15 @@ async def system_health() -> dict[str, Any]:
         "status": overall_status(components),
         "checked_at": datetime.now(UTC).isoformat(),
         "components": components,
-        "providers": provider_health.snapshot(),
+        "providers": _provider_health_snapshot(),
     }
+
+
+def _provider_health_snapshot() -> dict[str, dict[str, object]]:
+    snapshots = provider_health.snapshot()
+    if football_fixture_service.quota is not None:
+        snapshots["football"]["quota"] = football_fixture_service.quota
+    return snapshots
 
 
 @router.get("/api/v1/live-state")

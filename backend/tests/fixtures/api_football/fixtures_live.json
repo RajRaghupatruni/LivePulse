@@ -1,0 +1,16 @@
+{
+  "get": "fixtures",
+  "parameters": { "live": "2-3-39-40-45-48-61-78-135-140-253" },
+  "errors": [],
+  "results": 1,
+  "paging": { "current": 1, "total": 1 },
+  "response": [
+    {
+      "fixture": { "id": 190001, "date": "2026-09-12T17:00:00+00:00", "timestamp": 1789232400, "timezone": "UTC", "periods": { "first": 1789232400, "second": 1789236000 }, "status": { "long": "Second Half", "short": "2H", "elapsed": 79, "extra": null } },
+      "league": { "id": 39, "name": "Premier League", "country": "England", "season": 2026, "round": "Regular Season - 5" },
+      "teams": { "home": { "id": 101, "name": "Northbridge FC", "winner": null }, "away": { "id": 202, "name": "Riverside United", "winner": null } },
+      "goals": { "home": 2, "away": 1 },
+      "score": { "halftime": { "home": 1, "away": 0 }, "fulltime": { "home": null, "away": null }, "extratime": { "home": null, "away": null }, "penalty": { "home": null, "away": null } }
+    }
+  ]
+}

@@ -11,8 +11,10 @@ class FootballEventType(StrEnum):
     SCHEDULED = "football.match.scheduled"
     KICKOFF = "football.match.kickoff"
     GOAL = "football.match.goal"
+    SCORE_CORRECTED = "football.match.score_corrected"
     YELLOW_CARD = "football.match.yellow_card"
     RED_CARD = "football.match.red_card"
+    SUBSTITUTION = "football.match.substitution"
     HALFTIME = "football.match.halftime"
     SECOND_HALF = "football.match.second_half"
     FULLTIME = "football.match.fulltime"
@@ -27,6 +29,8 @@ class FootballPayload(BaseModel):
     minute: int = Field(default=0, ge=0, le=130)
     side: Literal["home", "away"] | None = None
     player: str | None = None
+    substitute: str | None = None
+    detail: str | None = None
     home_score: int = Field(default=0, ge=0)
     away_score: int = Field(default=0, ge=0)
     status: str | None = None
