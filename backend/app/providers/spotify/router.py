@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
 
@@ -29,6 +31,13 @@ def create_spotify_router(
     oauth_state = state_store or instance.state_store
     router = APIRouter(prefix="/api/v1/providers/spotify", tags=["spotify"])
 
+    def frontend_result(result: str, reason: str | None = None) -> RedirectResponse:
+        query = {"spotify": result}
+        if reason is not None:
+            query["reason"] = reason
+        frontend_url = instance.settings_getter().frontend_base_url.rstrip("/")
+        return RedirectResponse(f"{frontend_url}/?{urlencode(query)}", status_code=303)
+
     @router.get("/oauth/start", include_in_schema=True)
     async def start_authorization() -> RedirectResponse:
         state = oauth_state.create()
@@ -49,37 +58,21 @@ def create_spotify_router(
         # after FastAPI has parsed it so authorization codes never enter access logs.
         request.scope["query_string"] = b""
         if not oauth_state.consume(state):
-            raise LivePulseError("state_mismatch", "Spotify authorization state is invalid", 400)
+            return frontend_result("error", "state_invalid")
         if error is not None:
-            raise LivePulseError(
-                "authorization_denied", "Spotify authorization was not granted", 400
-            )
+            return frontend_result("error", "authorization_denied")
         if not code:
-            raise LivePulseError(
-                "authorization_code_missing", "Spotify did not return an authorization code", 400
-            )
+            return frontend_result("error", "authorization_incomplete")
         try:
             await instance.oauth.exchange_authorization_code(code)
-        except SpotifyOAuthError as exc:
-            status_code = (
-                503
-                if exc.detail_code
-                in {
-                    "configuration_missing",
-                    "credential_encryption_unavailable",
-                    "token_endpoint_unavailable",
-                }
-                else 502
-            )
-            raise LivePulseError(
-                exc.detail_code, "Spotify connection could not be completed", status_code
-            ) from None
+        except SpotifyOAuthError:
+            return frontend_result("error", "connection_failed")
         instance.health.report(
             "healthy",
             "connected",
             configured=instance._configured(),
         )
-        return RedirectResponse("/?spotify=connected", status_code=303)
+        return frontend_result("connected")
 
     @router.get("/connection", response_model=SpotifyConnectionStatus)
     async def connection_status() -> SpotifyConnectionStatus:

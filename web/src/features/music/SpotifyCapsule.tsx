@@ -47,6 +47,27 @@ export function SpotifyCapsule({ snapshot, provider }: { snapshot: SurfaceSnapsh
   const [devices, setDevices] = useState<SpotifyDevice[]>([])
   const [deviceMenu, setDeviceMenu] = useState(false)
   const [devicesLoading, setDevicesLoading] = useState(false)
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    const result = url.searchParams.get('spotify')
+    if (result === 'connected') {
+      setMessage('Spotify connected')
+    } else if (result === 'error') {
+      const reason = url.searchParams.get('reason')
+      setMessage(reason === 'authorization_denied'
+        ? 'Spotify authorization was denied. You can try connecting again.'
+        : reason === 'state_invalid'
+          ? 'Spotify authorization could not be verified. Please start again.'
+          : reason === 'authorization_incomplete'
+            ? 'Spotify authorization was incomplete. Please try again.'
+            : 'Spotify connection could not be completed. Please try again.')
+    } else {
+      return
+    }
+    url.searchParams.delete('spotify')
+    url.searchParams.delete('reason')
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [])
   const duration = playbackView?.duration_ms ?? 0
   const progress = duration > 0 ? Math.min(100, elapsed / duration * 100) : 0
   const artists = playbackView?.artists?.join(', ')

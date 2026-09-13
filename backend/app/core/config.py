@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     kafka_topic: str = "livepulse.events.football.v1"
     kafka_consumer_group: str = "livepulse-projector-v1"
     service_name: str = "livepulse-api"
+    frontend_base_url: str = Field(
+        default="http://127.0.0.1:5173", validation_alias="FRONTEND_BASE_URL"
+    )
     demo_step_seconds: float = 6.0
     run_background_services: bool = True
 

@@ -203,8 +203,10 @@ async def test_oauth_state_is_random_expiring_one_use_and_callback_rejects_misma
         expected_auth = base64.b64encode(b"spotify-client-id:spotify-client-secret").decode("ascii")
         assert request.headers["Authorization"] == f"Basic {expected_auth}"
         assert form["grant_type"] == ["authorization_code"]
-        assert form["code"] == ["authorization-code-secret"]
         assert form["redirect_uri"] == [REDIRECT_URI]
+        if form["code"] == ["temporary-failure-code"]:
+            return httpx.Response(502, json={"error": "token exchange rejected"})
+        assert form["code"] == ["authorization-code-secret"]
         token_request_assertions.append(True)
         return httpx.Response(
             200,
@@ -261,16 +263,55 @@ async def test_oauth_state_is_random_expiring_one_use_and_callback_rejects_misma
                 "/api/v1/providers/spotify/oauth/callback",
                 params={"state": "wrong-state", "code": "authorization-code-secret"},
             )
-            assert mismatch.status_code == 400
-            assert "state_mismatch" in mismatch.text
+            assert mismatch.status_code == 303
+            mismatch_url = urlsplit(mismatch.headers["location"])
+            assert mismatch_url.netloc == "127.0.0.1:5173"
+            assert parse_qs(mismatch_url.query) == {
+                "spotify": ["error"],
+                "reason": ["state_invalid"],
+            }
             assert "authorization-code-secret" not in mismatch.text
+
+            denied_state = provider.state_store.create()
+            denied = await browser.get(
+                "/api/v1/providers/spotify/oauth/callback",
+                params={
+                    "state": denied_state,
+                    "error": "access_denied",
+                    "error_description": "provider-supplied detail",
+                },
+            )
+            denied_url = urlsplit(denied.headers["location"])
+            assert denied.status_code == 303
+            assert parse_qs(denied_url.query) == {
+                "spotify": ["error"],
+                "reason": ["authorization_denied"],
+            }
+            assert "provider-supplied" not in denied.headers["location"]
+
+            failed_state = provider.state_store.create()
+            failed = await browser.get(
+                "/api/v1/providers/spotify/oauth/callback",
+                params={"state": failed_state, "code": "temporary-failure-code"},
+            )
+            failed_url = urlsplit(failed.headers["location"])
+            assert failed.status_code == 303
+            assert parse_qs(failed_url.query) == {
+                "spotify": ["error"],
+                "reason": ["connection_failed"],
+            }
 
             callback = await browser.get(
                 "/api/v1/providers/spotify/oauth/callback",
                 params={"state": valid_state, "code": "authorization-code-secret"},
             )
             assert callback.status_code == 303
-            assert callback.headers["location"] == "/?spotify=connected"
+            callback_url = urlsplit(callback.headers["location"])
+            assert callback_url.scheme == "http"
+            assert callback_url.netloc == "127.0.0.1:5173"
+            assert callback_url.path == "/"
+            assert parse_qs(callback_url.query) == {"spotify": ["connected"]}
+            assert callback_url.netloc != "127.0.0.1:8000"
             assert token_request_assertions == [True]
             assert "access-secret" not in callback.text
             assert "refresh-secret" not in callback.text
@@ -286,7 +327,7 @@ async def test_oauth_state_is_random_expiring_one_use_and_callback_rejects_misma
             assert status.json()["connected"] is True
             assert "access-secret" not in status.text and "refresh-secret" not in status.text
             assert "scopes" not in status.text
-            assert logged_callback_queries == [b"", b""]
+            assert logged_callback_queries == [b"", b"", b"", b""]
 
             disconnected = await browser.delete("/api/v1/providers/spotify/connection")
             assert disconnected.status_code == 200
