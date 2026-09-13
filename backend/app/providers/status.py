@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import Settings, get_settings
 
-ProviderStatusCode = Literal["healthy", "degraded", "unavailable", "disconnected", "unknown"]
+ProviderStatusCode = Literal[
+    "healthy", "degraded", "unavailable", "disconnected", "unknown", "rate_limited"
+]
 PROVIDER_IDS = ("football", "spotify", "github", "gmail", "weather")
 
 
@@ -99,18 +101,29 @@ class ProviderHealthRegistry:
         detail_code: str,
         *,
         rate_limited_until: datetime | None = None,
+        immediate_unavailable: bool = False,
     ) -> ProviderHealth:
         with self._lock:
             previous = self._states.get(provider)
             count = (previous.consecutive_failures if previous else 0) + 1
             return self.report(
                 provider,
-                "unavailable" if count >= 3 else "degraded",
+                "unavailable" if immediate_unavailable or count >= 3 else "degraded",
                 detail_code,
                 configured=True,
                 failed=True,
                 rate_limited_until=rate_limited_until,
             )
+
+    def rate_limited(self, provider: str, detail_code: str, until: datetime) -> ProviderHealth:
+        return self.report(
+            provider,
+            "rate_limited",
+            detail_code,
+            configured=True,
+            failed=True,
+            rate_limited_until=until,
+        )
 
     def snapshot(self, settings: Settings | None = None) -> dict[str, dict[str, object]]:
         settings = settings or get_settings()
