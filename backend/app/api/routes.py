@@ -45,6 +45,10 @@ from app.providers.github.storage import persist_observations
 from app.providers.observations import Observation
 from app.providers.registry import ProviderRegistry
 from app.providers.scheduler import PollScheduler
+from app.providers.spotify.auth import is_spotify_configured
+from app.providers.spotify.playback import SpotifyPlaybackChange
+from app.providers.spotify.provider import spotify_provider
+from app.providers.spotify.router import router as spotify_router
 from app.providers.status import provider_health
 from app.providers.weather.router import router as weather_router
 from app.providers.weather.service import weather_state
@@ -87,6 +91,7 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     github_health.initialize(settings)
     provider_registry = ProviderRegistry()
+    provider_registry.register_command_target(spotify_provider.command_target)
     football_source: FootballPollSource | None = None
     if settings.provider_configuration()["football"]:
         football_source = FootballPollSource.from_configuration(settings.api_football_key)
@@ -94,6 +99,8 @@ async def lifespan(_app: FastAPI):
             provider_registry.register_poll_source(football_source)
     if github_health.reconciliation_configured(settings):
         provider_registry.register_poll_source(GithubReconciliationSource(settings))
+    if is_spotify_configured(settings):
+        provider_registry.register_poll_source(spotify_provider.poll_source)
     weather_source = build_weather_source(settings)
     if weather_source is not None:
         provider_registry.register_poll_source(weather_source)
@@ -146,6 +153,15 @@ async def lifespan(_app: FastAPI):
                 except Exception:
                     weather_state.record_failure("event_persist_failed")
                     raise
+        elif provider == "spotify":
+            spotify_observations = [
+                observation
+                for observation in observations
+                if isinstance(observation.content, SpotifyPlaybackChange)
+            ]
+            if len(spotify_observations) != len(observations):
+                raise ValueError("Spotify source returned an unexpected observation type")
+            await spotify_provider.event_sink.handle(provider, spotify_observations, context)
         else:
             raise ValueError("no ingestion adapter is registered for this provider")
 
@@ -503,4 +519,5 @@ async def websocket_endpoint(websocket: WebSocket, last_cursor: int | None = Non
 
 app.include_router(router)
 app.include_router(github_router)
+app.include_router(spotify_router)
 app.include_router(weather_router)
