@@ -13,6 +13,7 @@ type PlatformAdapterCapabilities = {
   launchTargets?: Partial<Record<ExternalTarget, string>>
   openExternal?: (url: string) => void | Promise<void>
   requestFullscreen?: () => void | Promise<void>
+  toggleMaximize?: () => void | Promise<void>
   getBackendLifecycle?: () => BackendLifecycle
   subscribeBackendLifecycle?: (listener: (state: BackendLifecycle) => void) => () => void
   getPreference?: (key: string) => string | null
@@ -188,6 +189,15 @@ export async function requestFullscreen(): Promise<boolean> {
     }
     await document.documentElement.requestFullscreen?.()
     return Boolean(document.fullscreenElement)
+  } catch { return false }
+}
+
+export async function toggleWindowMaximize(): Promise<boolean> {
+  const host = adapter()
+  if (!host?.toggleMaximize) return false
+  try {
+    await host.toggleMaximize()
+    return true
   } catch { return false }
 }
 

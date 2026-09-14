@@ -205,7 +205,12 @@ class Settings(BaseSettings):
     def allowed_origins(self) -> tuple[str, ...]:
         if self.runtime_mode is RuntimeMode.PUBLIC_DEMO:
             return self.public_demo_allowed_origins
-        return ("http://localhost:5173", "http://127.0.0.1:5173")
+        return (
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+            "http://tauri.localhost",
+        )
 
     def __repr__(self) -> str:
         return f"Settings(runtime_mode={self.runtime_mode.value!r}, database_url=<redacted>)"

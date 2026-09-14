@@ -160,6 +160,70 @@ def test_personal_local_allows_exact_loopback_http_and_websocket_origins(
         pass
 
 
+def test_personal_local_allows_only_the_exact_tauri_asset_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routes, "get_settings", lambda: Settings(_env_file=None))
+    client = TestClient(routes.app, base_url="http://127.0.0.1:8000")
+
+    tauri_response = client.get(
+        "/health/live", headers={"origin": "http://tauri.localhost"}
+    )
+    assert tauri_response.status_code == 200
+    assert tauri_response.headers["access-control-allow-origin"] == "http://tauri.localhost"
+    for origin in (
+        "https://tauri.localhost",
+        "http://evil.tauri.localhost",
+        "http://tauri.localhost.evil.test",
+        "http://tauri.localhost.",
+        "http://tauri.localhost:80",
+    ):
+        assert client.get("/health/live", headers={"origin": origin}).status_code == 403
+
+    with client.websocket_connect(
+        "/ws",
+        headers={"host": "127.0.0.1:8000", "origin": "http://tauri.localhost"},
+    ):
+        pass
+
+    assert client.get(
+        "/health/live",
+        headers={"host": "192.168.1.20:8000", "origin": "http://tauri.localhost"},
+    ).status_code == 400
+
+
+def test_personal_local_allows_only_the_exact_tauri_dev_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routes, "get_settings", lambda: Settings(_env_file=None))
+    client = TestClient(routes.app, base_url="http://127.0.0.1:8000")
+
+    response = client.get("/health/live", headers={"origin": "http://127.0.0.1:5174"})
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5174"
+    assert (
+        client.get("/health/live", headers={"origin": "http://127.0.0.1:5175"}).status_code
+        == 403
+    )
+
+    with client.websocket_connect(
+        "/ws",
+        headers={"host": "127.0.0.1:8000", "origin": "http://127.0.0.1:5174"},
+    ):
+        pass
+
+
+def test_public_demo_does_not_inherit_personal_tauri_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routes, "get_settings", _demo_settings)
+    client = TestClient(routes.app, base_url="http://localhost:5174")
+
+    assert client.get(
+        "/health/live", headers={"origin": "http://tauri.localhost"}
+    ).status_code == 403
+
+
 def test_personal_local_websocket_rejects_untrusted_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

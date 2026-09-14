@@ -1,6 +1,6 @@
 # LivePulse
 
-LivePulse is a single-user local desktop realtime command center built around a durable event platform. M1 proved the event path; M2 added backend-owned focus and recovery-aware UI; M3 integrates real football, GitHub, Spotify, Gmail, and weather sources into canonical events, the transactional outbox, Redpanda, idempotent projections, the durable Pulse Timeline, and replayable realtime delivery. The final React UI follows the locked NYC landscape/portrait references and uses real provider state. It currently runs in a local browser for development and fallback; a later milestone will package it as a local desktop app, likely with Tauri v2. Provider credentials are optional, and the application remains composed when the backend or an optional provider is unavailable.
+LivePulse is a single-user local desktop realtime command center built around a durable event platform. M1 proved the event path; M2 added backend-owned focus and recovery-aware UI; M3 integrates real football, GitHub, Spotify, Gmail, and weather sources into canonical events, the transactional outbox, Redpanda, idempotent projections, the durable Pulse Timeline, and replayable realtime delivery. The React UI runs in the browser for development and fallback, and inside a Windows-first Tauri v2 desktop shell. The shell does not replace or bundle PostgreSQL, Redpanda, or FastAPI; Docker Compose remains the local service substrate. Provider credentials are optional, and the application remains composed when an optional provider is unavailable.
 
 The locked P0 direction and implementation status live in [PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md). Review [ARCHITECTURE.md](docs/ARCHITECTURE.md), its accepted ADRs, and [DEFINITION_OF_DONE.md](docs/DEFINITION_OF_DONE.md) before changing core behavior. Provider setup and data handling are documented in [SECURITY_AND_PRIVACY.md](docs/SECURITY_AND_PRIVACY.md) and the provider-local READMEs.
 
@@ -10,6 +10,10 @@ The locked P0 direction and implementation status live in [PRODUCT_REQUIREMENTS.
 - Python 3.13
 - Node.js 22 and npm
 - Docker Desktop with Compose
+- Rust stable with the MSVC toolchain and Microsoft C++ Build Tools for Tauri development/builds ([Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/))
+- Microsoft Edge WebView2 Runtime (included with current supported Windows releases)
+
+Install Rust with `winget install --id Rustlang.Rustup --exact`, install the Visual Studio C++ Build Tools with the “Desktop development with C++” workload, then restart PowerShell so Cargo is on `PATH`.
 
 ## Windows quick start
 
@@ -34,7 +38,7 @@ Set-Location web
 npm run dev
 ```
 
-Open <http://localhost:5173>. The API is at <http://localhost:8000>; OpenAPI docs are at <http://localhost:8000/docs>. The backend runs `alembic upgrade head` before serving requests. The UI reports backend starting/unavailable, reconnects with bounded backoff, and keeps last-known state visible when possible. The browser development shell does not manage backend processes; a later local desktop shell will own that lifecycle. PostgreSQL and Redpanda can also be started directly with `docker compose up -d postgres redpanda`.
+Open <http://localhost:5173>. The API is at <http://localhost:8000>; OpenAPI docs are at <http://localhost:8000/docs>. The backend runs `alembic upgrade head` before serving requests. The UI reports backend starting/unavailable, reconnects with bounded backoff, and keeps last-known state visible when possible. Neither browser mode nor the Tauri shell manages backend process ownership; Docker Compose remains responsible for PostgreSQL, Redpanda, and FastAPI. PostgreSQL and Redpanda can also be started directly with `docker compose up -d postgres redpanda`.
 
 The development script also waits for PostgreSQL and Redpanda health before running migrations. The all-container path is:
 
@@ -42,7 +46,32 @@ The development script also waits for PostgreSQL and Redpanda health before runn
 docker compose up --build
 ```
 
-It binds the web client on `127.0.0.1:5173`, API on `127.0.0.1:8000`, PostgreSQL on `127.0.0.1:5432`, and Redpanda Kafka on `127.0.0.1:19092`. `PERSONAL_LOCAL` has no conventional login: it is a single-user local app whose primary trust boundary is loopback isolation. Host and Origin checks cover HTTP and WebSockets, and CORS allows only the exact local frontend origins. Keep these ports off the LAN and internet.
+It binds the browser/Compose web client on `127.0.0.1:5173`, the Tauri development Vite server on `127.0.0.1:5174`, API on `127.0.0.1:8000`, PostgreSQL on `127.0.0.1:5432`, and Redpanda Kafka on `127.0.0.1:19092`. `PERSONAL_LOCAL` has no conventional login: it is a single-user local app whose primary trust boundary is loopback isolation. Host and Origin checks cover HTTP and WebSockets, and CORS allows only the exact local Vite origins plus the packaged Tauri origin. Keep these ports off the LAN and internet.
+
+## Windows desktop app (Tauri v2)
+
+The Tauri shell bundles the existing Vite production build and uses the same React application as browser mode. PostgreSQL, Redpanda, and FastAPI remain local Docker Compose services; the desktop app does not start or stop Docker, so closing its window cannot terminate containers or interrupt durable work. Start the service stack from the repository root (the web container is not needed for the desktop app):
+
+```powershell
+docker compose up -d --wait postgres redpanda backend
+```
+
+The app checks `GET /health/ready` before revealing the dashboard. It shows a waiting state, offers retry after the backend is unavailable, and automatically restores the dashboard when readiness returns. Provider degradation remains visible in System Pulse after the API is ready. In the ignored root `.env`, set any provider configuration needed by the backend before starting the stack.
+
+For desktop development, keep the services running and start Tauri from the frontend package directory:
+
+```powershell
+Set-Location web
+npm run tauri:dev
+```
+
+This starts a loopback-only Vite server on `127.0.0.1:5174` as Tauri's development UI, separate from the browser/Compose port, and does not replace the normal browser workflow (`npm run dev`). For a Windows installer, run:
+
+```powershell
+npm run tauri:build
+```
+
+The release executable and MSI are written under `src-tauri/target/release/bundle/` (NSIS and MSI subdirectories). The default installer uses the Windows-managed WebView2 runtime; it does not bundle Docker or provider secrets. Building MSI packages may require Windows' optional VBScript feature. Browser development and the desktop window both connect only to the loopback backend. Tauri's packaged Windows origin is allowed as one exact PERSONAL_LOCAL origin; PUBLIC_DEMO and all other Host/Origin rules remain unchanged. Already authorized server-side provider credentials work in desktop mode, but a complete OAuth callback handoff back into the packaged shell is not yet implemented; use browser development mode to connect or reconnect provider accounts.
 
 ## Demo
 

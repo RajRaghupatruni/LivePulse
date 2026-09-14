@@ -11,6 +11,8 @@ htmlcov/
 node_modules/
 dist/
 .vite/
+src-tauri/target/
+src-tauri/gen/schemas/
 .idea/
 .vscode/
 Thumbs.db

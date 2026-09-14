@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getBackendLifecycle, subscribeBackendLifecycle } from '../lib/platform'
-import { getSystemHealth } from '../lib/api'
+import { getBackendReadiness, getSystemHealth } from '../lib/api'
 import type { SystemHealth } from '../types/livepulse'
 
 export type HealthRequestState = 'checking' | 'starting' | 'available' | 'unavailable'
@@ -21,11 +21,14 @@ export function useSystemHealth() {
   const [requestState, setRequestState] = useState<HealthRequestState>(() => requestStateForLifecycle(getBackendLifecycle()) ?? 'checking')
   const startedAt = useRef(Date.now())
   const hasBeenReady = useRef(requestState === 'available')
+  const [hasBeenReadyOnce, setHasBeenReadyOnce] = useState(requestState === 'available')
 
   const refresh = useCallback(async () => {
     try {
+      await getBackendReadiness()
       setHealth(await getSystemHealth())
       hasBeenReady.current = true
+      setHasBeenReadyOnce(true)
       setRequestState('available')
       return true
     } catch {
@@ -62,7 +65,10 @@ export function useSystemHealth() {
     const unsubscribe = subscribeBackendLifecycle((lifecycle) => {
       const mapped = requestStateForLifecycle(lifecycle)
       if (!mapped) return
-      if (mapped === 'available') hasBeenReady.current = true
+      if (mapped === 'available') {
+        hasBeenReady.current = true
+        setHasBeenReadyOnce(true)
+      }
       setRequestState(mapped)
       scheduleNow()
     })
@@ -80,5 +86,5 @@ export function useSystemHealth() {
     }
   }, [refresh])
 
-  return { health, requestState, refresh }
+  return { health, requestState, hasBeenReadyOnce, refresh }
 }

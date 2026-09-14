@@ -108,7 +108,9 @@ class TrustedBoundaryMiddleware:
         if parsed is None:
             return False
         if settings.runtime_mode is RuntimeMode.PERSONAL_LOCAL:
-            if parsed[1] not in {"localhost", "127.0.0.1", "::1"}:
+            browser_origin = parsed[1] in {"localhost", "127.0.0.1", "::1"}
+            tauri_origin = origin == "http://tauri.localhost"
+            if not browser_origin and not tauri_origin:
                 return False
         return parsed in {_parse_origin(value) for value in settings.allowed_origins}
 

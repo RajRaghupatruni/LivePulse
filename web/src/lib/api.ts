@@ -29,6 +29,8 @@ export type GmailInbox = {
   messages: GmailMessage[]
 }
 
+export type BackendReadiness = { status: 'ready' }
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), {
     ...init,
@@ -48,6 +50,7 @@ export const getTimeline = (limit = 40, before?: number) => {
   return request<TimelineResponse>(`/api/v1/timeline?${query.toString()}`)
 }
 export const getSystemHealth = () => request<SystemHealth>('/api/v1/system/health')
+export const getBackendReadiness = () => request<BackendReadiness>('/health/ready')
 export const getFootballFixtures = () => request<FootballFixtures>('/api/v1/football/fixtures')
 export const getSpotifyPlayback = () => request<SpotifyPlaybackView>('/api/v1/providers/spotify/playback')
 export const getSpotifyDevices = () => request<SpotifyDevice[]>('/api/v1/providers/spotify/devices')

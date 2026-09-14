@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apiUrl, beginAuthorization, consumeWakeSequence, externalTargetUrl, getBackendLifecycle, getPreference, isDesktopShell, openExternal, removePreference, requestFullscreen, setPreference, subscribeBackendLifecycle, websocketUrl } from './platform'
+import { apiUrl, beginAuthorization, consumeWakeSequence, externalTargetUrl, getBackendLifecycle, getPreference, isDesktopShell, openExternal, removePreference, requestFullscreen, setPreference, subscribeBackendLifecycle, toggleWindowMaximize, websocketUrl } from './platform'
+import { initializeTauriPlatform } from './tauriPlatform'
 
 describe('platform boundary', () => {
   afterEach(() => { delete window.livePulsePlatform; vi.restoreAllMocks() })
@@ -10,6 +11,21 @@ describe('platform boundary', () => {
     window.livePulsePlatform = { kind: 'desktop', apiBaseUrl: 'http://127.0.0.1:8111', websocketBaseUrl: 'ws://127.0.0.1:8111' }
     expect(isDesktopShell()).toBe(true)
     expect(apiUrl('/api/v1/live-state')).toBe('http://127.0.0.1:8111/api/v1/live-state')
+  })
+
+  it('keeps browser endpoints same-origin and resolves explicit desktop API and websocket bases', async () => {
+    expect(apiUrl('/health/ready')).toBe('/health/ready')
+    const toggleMaximize = vi.fn()
+    window.livePulsePlatform = {
+      kind: 'desktop',
+      apiBaseUrl: 'http://127.0.0.1:8000',
+      websocketBaseUrl: 'ws://127.0.0.1:8000',
+      toggleMaximize,
+    }
+    expect(apiUrl('/health/ready')).toBe('http://127.0.0.1:8000/health/ready')
+    expect(websocketUrl('/ws')).toBe('ws://127.0.0.1:8000/ws')
+    await expect(toggleWindowMaximize()).resolves.toBe(true)
+    expect(toggleMaximize).toHaveBeenCalledOnce()
   })
 
   it('centralizes WebSocket address selection for browser and desktop runtime config', () => {
@@ -37,6 +53,13 @@ describe('platform boundary', () => {
     await expect(openExternal('javascript:alert(1)')).resolves.toBe(false)
     await expect(openExternal('https://chatgpt.com/')).resolves.toBe(true)
     expect(openExternalFromShell).toHaveBeenCalledWith('https://chatgpt.com/')
+  })
+
+  it('keeps normal browser external-link behavior and skips Tauri setup outside the desktop shell', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue({ opener: null } as Window)
+    expect(await initializeTauriPlatform()).toBe(false)
+    expect(await openExternal('https://github.com/')).toBe(true)
+    expect(open).toHaveBeenCalledWith('https://github.com/', '_blank', 'noopener,noreferrer')
   })
 
   it('delegates authorization and fullscreen behavior to the shell adapter', async () => {

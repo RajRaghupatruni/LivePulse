@@ -6,9 +6,11 @@ const apiTarget = (globalThis as { process?: { env?: Record<string, string | und
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  clearScreen: false,
   server: {
     port: 5173,
     strictPort: true,
+    watch: { ignored: ['../src-tauri/**'] },
     proxy: {
       // Preserve the loopback browser Host and Origin. The API intentionally
       // trusts exact local origins and must never see the internal Docker name.

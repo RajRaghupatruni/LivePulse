@@ -1,0 +1,39 @@
+import type { LivePulsePlatformAdapter } from './platform'
+
+// Packaged desktop mode is intentionally pinned to the PERSONAL_LOCAL loopback
+// service; browser builds may still override endpoints through Vite settings.
+const apiBaseUrl = 'http://127.0.0.1:8000'
+const websocketBaseUrl = 'ws://127.0.0.1:8000'
+
+/** Install native capabilities only inside Tauri; browsers keep the existing web adapter. */
+export async function initializeTauriPlatform(): Promise<boolean> {
+  const { isTauri } = await import('@tauri-apps/api/core')
+  if (!isTauri()) return false
+
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  const appWindow = getCurrentWindow()
+  const adapter: LivePulsePlatformAdapter = {
+    kind: 'desktop',
+    apiBaseUrl,
+    websocketBaseUrl,
+    openExternal: async (url) => {
+      const parsed = new URL(url)
+      if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Only web URLs can be opened externally')
+      const { openUrl } = await import('@tauri-apps/plugin-opener')
+      await openUrl(parsed)
+    },
+    requestFullscreen: async () => {
+      await appWindow.setFullscreen(!(await appWindow.isFullscreen()))
+    },
+    toggleMaximize: async () => {
+      if (await appWindow.isMaximized()) await appWindow.unmaximize()
+      else await appWindow.maximize()
+    },
+    beginAuthorization: (path) => {
+      // OAuth begins at the backend, which remains the sole owner of client secrets and tokens.
+      window.location.assign(new URL(path, `${apiBaseUrl}/`).href)
+    },
+  }
+  window.livePulsePlatform = adapter
+  return true
+}

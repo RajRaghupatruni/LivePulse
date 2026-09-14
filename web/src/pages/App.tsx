@@ -12,6 +12,7 @@ import { PulseTimeline } from '../features/timeline/PulseTimeline'
 import { CommandPalette, QuickLaunch, type AppView } from '../features/command/QuickLaunch'
 import { GmailPanel } from '../features/mail/GmailPanel'
 import { LaunchDestinationSettings } from '../features/command/LaunchDestinationSettings'
+import { RuntimeStartup } from '../features/system/RuntimeStartup'
 import { useLivePulse } from '../hooks/useLivePulse'
 import { useProviderSurfaces } from '../hooks/useProviderSurfaces'
 import { useSystemHealth } from '../hooks/useSystemHealth'
@@ -28,7 +29,7 @@ const navigation: Array<{ id: AppView; label: string; icon: typeof Home }> = [
 
 export default function App() {
   const { live, timeline, connection, eventArrival, loadOlder, hasOlder, loadingOlder, refresh } = useLivePulse()
-  const { health, requestState, refresh: refreshHealth } = useSystemHealth()
+  const { health, requestState, hasBeenReadyOnce, refresh: refreshHealth } = useSystemHealth()
   const surfaces = useProviderSurfaces(health?.runtime_mode === 'PERSONAL_LOCAL')
   const weatherLocation = useWeatherLocation(health?.runtime_mode === 'PERSONAL_LOCAL')
   const timer = useFocusTimerSnapshot()
@@ -120,6 +121,10 @@ export default function App() {
     weather: weatherAtmosphere(weather?.category),
     spotifyPlaying: shownSurfaces.spotify.value?.playback?.is_playing ?? false,
   }), [matchMode, degraded, focused, dominantPriority, shownConnection, shownEventArrival?.event_type, weather?.category, shownSurfaces.spotify.value?.playback?.is_playing])
+
+  if (!hasBeenReadyOnce && requestState !== 'available') {
+    return <RuntimeStartup state={requestState} onRetry={() => { void refreshHealth() }} />
+  }
 
   const navigate = (next: AppView) => {
     setGmailExpanded(false)
