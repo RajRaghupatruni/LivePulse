@@ -18,12 +18,37 @@ export function GmailPanel({ provider, expanded = false, showAll = false, onView
   const loading = snapshotOverride?.loading ?? loadingFromProvider
   const [selected, setSelected] = useState<GmailMessage | null>(null)
   const [detail, setDetail] = useState<GmailMessage | null>(null)
+  const [callbackMessage, setCallbackMessage] = useState('')
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const viewAllTriggerRef = useRef<HTMLButtonElement | null>(null)
   const expandedCloseRef = useRef<HTMLButtonElement | null>(null)
   const expandedDialogRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
   const dialogRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    const result = url.searchParams.get('gmail')
+    if (result === 'connected') {
+      setCallbackMessage('Gmail connected. Read-only sync is starting.')
+    } else if (result === 'error') {
+      const reason = url.searchParams.get('reason')
+      setCallbackMessage(reason === 'authorization_denied'
+        ? 'Gmail authorization was denied. You can try connecting again.'
+        : reason === 'state_invalid'
+          ? 'Gmail authorization could not be verified. Please start again.'
+          : reason === 'authorization_incomplete' || reason === 'callback_invalid'
+            ? 'Gmail authorization was incomplete. Please try again.'
+            : reason === 'setup_required'
+              ? 'Gmail OAuth setup is unavailable. Check the local provider configuration.'
+              : 'Gmail connection could not be completed. Please try again.')
+    } else {
+      return
+    }
+    url.searchParams.delete('gmail')
+    url.searchParams.delete('reason')
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [])
 
   const refresh = useCallback(async () => {
     if (provider?.configured === false) {
@@ -125,6 +150,7 @@ export function GmailPanel({ provider, expanded = false, showAll = false, onView
       <span className={`surface-live-mark${provider?.status === 'healthy' ? ' is-ready' : ''}`} title={provider?.status ?? 'Awaiting provider'} />
       <button className="surface-refresh" type="button" aria-label="Refresh Gmail" onClick={() => { setLoadingFromProvider(true); void refresh() }}><RefreshCw size={14} /></button>
     </header>
+    {callbackMessage && <p className="gmail-oauth-feedback" role="status">{callbackMessage}</p>}
     {loading && !inbox ? <div className="gmail-state"><span className="quiet-spinner" /><strong>Resolving inbox</strong><small>Read-only metadata from your connected account</small></div>
       : configured === false || status === 'not_configured' || status === 'disconnected' ? <div className="gmail-state gmail-state-setup"><Inbox size={19} /><strong>{configured === false ? 'Gmail setup required' : 'Reconnect Gmail'}</strong><small>{configured === false ? 'Add Google OAuth credentials and local encryption configuration to the backend.' : 'Read-only access. Message bodies are not retained.'}</small>{configured !== false && <button type="button" className="text-action" onClick={() => void beginAuthorization('/api/v1/providers/gmail/oauth/start')}>Connect account <ArrowUpRight size={13} /></button>}</div>
         : status === 'unavailable' || !inbox ? <div className="gmail-state"><span className="state-mark state-mark-warning" /><strong>Inbox unavailable</strong><small>System Pulse has the provider freshness details.</small></div>

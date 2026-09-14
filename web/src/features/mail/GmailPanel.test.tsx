@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { GmailInbox, GmailMessage } from '../../lib/api'
 import { GmailPanel } from './GmailPanel'
 
@@ -29,6 +29,24 @@ function GmailHarness() {
 }
 
 describe('read-only Gmail expansion', () => {
+  afterEach(() => window.history.replaceState({}, '', '/'))
+
+  it('shows a bounded Gmail callback result and removes it from the address bar', () => {
+    window.history.replaceState({}, '', '/?gmail=error&reason=authorization_denied')
+    render(<GmailPanel provider={{ provider: 'gmail', status: 'disconnected', configured: true, checked_at: null, last_success_at: null, last_failure_at: null, last_observation_at: null, consecutive_failures: 0, rate_limited_until: null, detail_code: 'not_connected' }} snapshotOverride={{ value: { status: 'disconnected', configured: true, messages: [] }, loading: false, available: true }} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Gmail authorization was denied')
+    expect(window.location.search).toBe('')
+  })
+
+  it('shows successful connection feedback and removes its callback query', () => {
+    window.history.replaceState({}, '', '/?gmail=connected')
+    render(<GmailPanel snapshotOverride={{ value: inbox, loading: false, available: true }} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Gmail connected. Read-only sync is starting.')
+    expect(window.location.search).toBe('')
+  })
+
   it('opens the full inbox overlay, opens message metadata, and closes with Escape', async () => {
     render(<GmailHarness />)
     fireEvent.click(screen.getByRole('button', { name: 'View all Gmail messages' }))

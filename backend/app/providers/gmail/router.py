@@ -1,5 +1,7 @@
 """Modular browser-facing Google OAuth routes; token material stays server-side."""
 
+from urllib.parse import urlencode
+
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -21,6 +23,14 @@ from app.storage.models import ProviderCheckpointRow, ProviderConnectionRow
 router = APIRouter(prefix="/api/v1/providers/gmail/oauth", tags=["gmail-oauth"])
 connection_router = APIRouter(prefix="/api/v1/providers/gmail", tags=["gmail"])
 install_oauth_access_log_filter()
+
+
+def _frontend_oauth_result(result: str, reason: str | None = None) -> RedirectResponse:
+    query = {"gmail": result}
+    if reason is not None:
+        query["reason"] = reason
+    frontend_url = get_settings().frontend_base_url.rstrip("/")
+    return RedirectResponse(f"{frontend_url}/?{urlencode(query)}", status_code=303)
 
 
 @connection_router.delete("/connection")
@@ -128,23 +138,31 @@ async def oauth_callback(request: Request) -> RedirectResponse:
     code = request.query_params.get("code")
     error = request.query_params.get("error")
     if not state or len(state) > 200 or (code is not None and len(code) > 4096):
-        raise HTTPException(status_code=400, detail="oauth_callback_invalid")
+        return _frontend_oauth_result("error", "callback_invalid")
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as http:
         oauth = GoogleOAuth(settings, SessionFactory, http)
         if oauth.states is None:
-            raise HTTPException(status_code=503, detail="oauth_not_configured")
+            return _frontend_oauth_result("error", "setup_required")
         if error or not code:
             if not await oauth.states.consume(state):
-                raise HTTPException(status_code=400, detail="oauth_state_invalid")
+                return _frontend_oauth_result("error", "state_invalid")
             if error:
-                raise HTTPException(status_code=400, detail="authorization_denied")
-            raise HTTPException(status_code=400, detail="authorization_code_missing")
+                return _frontend_oauth_result("error", "authorization_denied")
+            return _frontend_oauth_result("error", "authorization_incomplete")
         try:
             await oauth.complete(state=state, code=code)
         except OAuthError as exc:
-            raise _http_error(exc) from exc
+            reason = {
+                "oauth_state_invalid": "state_invalid",
+                "authorization_code_invalid": "authorization_incomplete",
+                "oauth_not_configured": "setup_required",
+                "credential_encryption_unavailable": "setup_required",
+            }.get(exc.detail_code, "connection_failed")
+            return _frontend_oauth_result("error", reason)
+        except httpx.HTTPError:
+            return _frontend_oauth_result("error", "connection_failed")
     provider_health.report("gmail", "degraded", "initial_sync_pending", configured=True)
-    return RedirectResponse("/?gmail=connected", status_code=303)
+    return _frontend_oauth_result("connected")
 
 
 @router.get("/complete", include_in_schema=False)

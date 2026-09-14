@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from uuid import uuid4
 
 import httpx
@@ -10,6 +10,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from starlette.requests import Request
 
 from app.core.config import Settings
 from app.domain.events import CanonicalEvent
@@ -32,6 +33,7 @@ from app.providers.gmail.oauth import (
     _decrypt_tokens,
     _encrypt_tokens,
 )
+from app.providers.gmail.router import oauth_callback
 from app.providers.gmail.service import GmailReadOnlyService
 from app.providers.gmail.sync import (
     HISTORY_CHECKPOINT,
@@ -70,7 +72,7 @@ def google_settings() -> Settings:
         _env_file=None,
         google_client_id="client-id",
         google_client_secret="server-only-client-secret",
-        google_redirect_uri="http://localhost:8000/api/v1/providers/gmail/oauth/callback",
+        google_redirect_uri="http://127.0.0.1:8000/api/v1/providers/gmail/oauth/callback",
         credential_encryption_key=Fernet.generate_key().decode("ascii"),
     )
 
@@ -180,6 +182,7 @@ async def test_authorization_code_exchange_persists_only_encrypted_readonly_toke
         url = await oauth.begin()
         params = parse_qs(urlparse(url).query)
         assert params["scope"] == [GMAIL_READONLY_SCOPE]
+        assert params["redirect_uri"] == [google_settings.google_redirect_uri]
         assert params["response_type"] == ["code"]
         assert params["access_type"] == ["offline"]
         assert "gmail.modify" not in url and "mail.google.com" not in url
@@ -203,6 +206,97 @@ async def test_authorization_code_exchange_persists_only_encrypted_readonly_toke
         stored = _decrypt_tokens(google_settings, ciphertext)
         assert stored.access_token.get_secret_value() == "access-private"
         assert stored.refresh_token.get_secret_value() == "refresh-private"
+
+
+@pytest.mark.asyncio
+async def test_gmail_oauth_callback_redirects_to_frontend_with_bounded_results(
+    monkeypatch, google_settings
+) -> None:
+    import importlib
+
+    gmail_router = importlib.import_module("app.providers.gmail.router")
+    issued = {"denied-state", "incomplete-state", "failed-state", "success-state"}
+    completed: list[tuple[str, str]] = []
+
+    class StateStore:
+        async def consume(self, state: str) -> bool:
+            if state not in issued:
+                return False
+            issued.remove(state)
+            return True
+
+    states = StateStore()
+
+    class FakeGoogleOAuth:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.states = states
+
+        async def complete(self, *, state: str, code: str) -> None:
+            if not await self.states.consume(state):
+                raise OAuthError("oauth_state_invalid")
+            completed.append((state, code))
+            if code == "exchange-failure-code":
+                raise OAuthError("authorization_exchange_failed")
+
+    monkeypatch.setattr(gmail_router, "get_settings", lambda: google_settings)
+    monkeypatch.setattr(gmail_router, "GoogleOAuth", FakeGoogleOAuth)
+
+    async def invoke(query: dict[str, str]):
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/v1/providers/gmail/oauth/callback",
+                "query_string": urlencode(query).encode(),
+                "headers": [],
+            }
+        )
+        response = await oauth_callback(request)
+        assert response.status_code == 303
+        return urlparse(response.headers["location"])
+
+    denied = await invoke(
+        {
+            "state": "denied-state",
+            "error": "access_denied",
+            "error_description": "provider-private-detail",
+        }
+    )
+    assert denied.scheme == "http" and denied.netloc == "127.0.0.1:5173"
+    assert parse_qs(denied.query) == {
+        "gmail": ["error"],
+        "reason": ["authorization_denied"],
+    }
+    assert "provider-private-detail" not in denied.geturl()
+
+    invalid_state = await invoke({"state": "forged-state", "error": "access_denied"})
+    assert parse_qs(invalid_state.query) == {
+        "gmail": ["error"],
+        "reason": ["state_invalid"],
+    }
+
+    incomplete = await invoke({"state": "incomplete-state"})
+    assert parse_qs(incomplete.query) == {
+        "gmail": ["error"],
+        "reason": ["authorization_incomplete"],
+    }
+
+    failed = await invoke({"state": "failed-state", "code": "exchange-failure-code"})
+    assert parse_qs(failed.query) == {
+        "gmail": ["error"],
+        "reason": ["connection_failed"],
+    }
+    assert "exchange-failure-code" not in failed.geturl()
+
+    connected = await invoke({"state": "success-state", "code": "one-time-code"})
+    assert connected.scheme == "http" and connected.netloc == "127.0.0.1:5173"
+    assert connected.path == "/"
+    assert parse_qs(connected.query) == {"gmail": ["connected"]}
+    assert "127.0.0.1:8000" not in connected.geturl()
+    assert completed == [
+        ("failed-state", "exchange-failure-code"),
+        ("success-state", "one-time-code"),
+    ]
 
 
 @pytest.mark.asyncio
