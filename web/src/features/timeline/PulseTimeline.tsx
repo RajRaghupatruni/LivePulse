@@ -14,8 +14,8 @@ function displayTime(item: TimelineItem) {
   return elapsed ?? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export function PulseTimeline({ items, hasOlder = false, loadingOlder = false, onLoadOlder, onRefresh }: {
-  items: TimelineItem[]; hasOlder?: boolean; loadingOlder?: boolean; onLoadOlder?: () => void; onRefresh?: () => void
+export function PulseTimeline({ items, hasOlder = false, loadingOlder = false, onLoadOlder, onRefresh, arrivalId = null }: {
+  items: TimelineItem[]; hasOlder?: boolean; loadingOlder?: boolean; onLoadOlder?: () => void; onRefresh?: () => void; arrivalId?: string | null
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const reduced = useReducedMotion()
@@ -53,7 +53,7 @@ export function PulseTimeline({ items, hasOlder = false, loadingOlder = false, o
           const isExpanded = expanded === item.event_id
           const observed = item.observed_at ? new Date(item.observed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : null
           const received = item.observed_at ? timeAgo(item.observed_at) : null
-          return <motion.article className={`timeline-entry domain-${data.domain} severity-${data.severity}${index === 0 ? ' timeline-entry-latest' : ''}`} key={item.event_id} layout initial={reduced ? false : { opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduced ? 0 : .28, ease: [.2, .8, .2, 1] }} aria-posinset={index + 1}>
+          return <motion.article className={`timeline-entry domain-${data.domain} severity-${data.severity}${index === 0 ? ' timeline-entry-latest' : ''}${item.event_id === arrivalId ? ' timeline-entry-arriving' : ''}`} key={item.event_id} layout initial={reduced || item.event_id !== arrivalId ? false : { opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }} transition={{ duration: reduced ? 0 : .28, ease: [.2, .8, .2, 1] }} aria-posinset={index + 1}>
             <button className="timeline-entry-main" type="button" data-event-id={item.event_id} aria-expanded={isExpanded} onClick={() => setExpanded(isExpanded ? null : item.event_id)}>
               <span className="timeline-domain-mark"><Icon size={16} strokeWidth={1.7} aria-hidden="true" />{data.severity === 'critical' && <i className="timeline-severity-mark" />}</span>
               <span className="timeline-event-copy"><span className="timeline-event-head"><strong>{data.title}</strong><time dateTime={item.timestamp} title={new Date(item.timestamp).toLocaleString()}>{displayTime(item)}</time></span><span className="timeline-summary">{data.summary}</span>{data.detail && (isExpanded || data.domain === 'football') && <span className="timeline-detail">{data.detail}</span>}</span>

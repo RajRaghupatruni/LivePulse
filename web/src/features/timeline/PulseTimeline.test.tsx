@@ -45,4 +45,17 @@ describe('PulseTimeline', () => {
     fireEvent.keyDown(rows[2], { key: 'Home' })
     expect(rows[0]).toHaveFocus()
   })
+
+  it('does not treat history as an arrival and marks only the newly delivered event', () => {
+    const items = ['old', 'new'].map((id, cursor) => ({
+      cursor: cursor + 1, event_id: id, event_type: 'mail.message.received', source: 'gmail', subject_id: id,
+      timestamp: `2026-09-12T20:00:0${cursor}Z`, payload: {},
+    }))
+    const view = render(<PulseTimeline items={items} />)
+    expect(document.querySelectorAll('.timeline-entry-arriving')).toHaveLength(0)
+    expect(document.querySelector('.timeline-entry')?.getAttribute('style') ?? '').not.toContain('opacity: 0')
+    view.rerender(<PulseTimeline items={items} arrivalId="new" />)
+    expect(document.querySelectorAll('.timeline-entry-arriving')).toHaveLength(1)
+    expect(document.querySelector('.timeline-entry-arriving .timeline-entry-main')).toHaveAttribute('data-event-id', 'new')
+  })
 })

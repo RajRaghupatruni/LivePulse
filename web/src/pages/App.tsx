@@ -19,6 +19,8 @@ import { useSystemHealth } from '../hooks/useSystemHealth'
 import { useWeatherLocation } from '../hooks/useWeatherLocation'
 import { consumeWakeSequence, requestFullscreen } from '../lib/platform'
 import type { VisualFixture, VisualFixtureName } from '../dev/visualFixtures'
+import { useVisualMotion } from '../features/motion/useVisualMotion'
+import { usePhysicalSurfaces } from '../features/motion/usePhysicalSurfaces'
 
 const navigation: Array<{ id: AppView; label: string; icon: typeof Home }> = [
   { id: 'home', label: 'Home', icon: Home },
@@ -34,6 +36,7 @@ export default function App() {
   const weatherLocation = useWeatherLocation(health?.runtime_mode === 'PERSONAL_LOCAL')
   const timer = useFocusTimerSnapshot()
   const reducedMotion = useReducedMotion()
+  usePhysicalSurfaces(Boolean(reducedMotion))
   const [view, setView] = useState<AppView>('home')
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [timelineHistory, setTimelineHistory] = useState(false)
@@ -110,6 +113,18 @@ export default function App() {
     : fixtureSet?.live.length ? 'live' : hasUpcoming ? 'scheduled' : shownLive.match?.status === 'fulltime' ? 'fulltime' : shownLive.focus.match_mode
   const degraded = shownHealth?.status === 'degraded' || shownConnection === 'DEGRADED'
   const dominantPriority = shownLive.dominant_focus?.priority ?? shownLive.focus.score
+  const spotifyPlayback = shownSurfaces.spotify.value?.playback
+  const visualMotion = useVisualMotion({
+    eventArrival: shownEventArrival,
+    matchMode,
+    focusKey: [shownLive.focus.reason, shownLive.focus.source, shownLive.focus.subject_id, shownLive.focus.score].join('|'),
+    connection: shownConnection,
+    healthStatus: shownHealth?.status ?? null,
+    weatherKey: selectedWeatherLocation ? [selectedWeatherLocation.id, weather?.category ?? '', dayPhase].join('|') : '',
+    spotifyTrackId: spotifyPlayback?.item_id ?? null,
+    spotifyPlaying: spotifyPlayback?.is_playing ?? null,
+  })
+  const currentVisualEvent = visualMotion.current
   const timelineItems = timelineHistory || view === 'timeline' ? shownTimeline : shownTimeline.slice(0, 6)
   const environmentalState = useMemo(() => ({
     mode: matchMode,
@@ -117,10 +132,10 @@ export default function App() {
     focused,
     attention: dominantPriority,
     connection: shownConnection,
-    eventType: shownEventArrival?.event_type ?? null,
+    eventType: shownEventArrival && shownEventArrival.event_id === currentVisualEvent?.id ? shownEventArrival.event_type : null,
     weather: weatherAtmosphere(weather?.category),
     spotifyPlaying: shownSurfaces.spotify.value?.playback?.is_playing ?? false,
-  }), [matchMode, degraded, focused, dominantPriority, shownConnection, shownEventArrival?.event_type, weather?.category, shownSurfaces.spotify.value?.playback?.is_playing])
+  }), [matchMode, degraded, focused, dominantPriority, shownConnection, shownEventArrival, currentVisualEvent?.id, weather?.category, shownSurfaces.spotify.value?.playback?.is_playing])
 
   if (!hasBeenReadyOnce && requestState !== 'available') {
     return <RuntimeStartup state={requestState} onRetry={() => { void refreshHealth() }} />
@@ -139,8 +154,8 @@ export default function App() {
     window.setTimeout(() => window.dispatchEvent(new Event(`livepulse:match-${direction}`)), 0)
   }
 
-  return <main className={`livepulse-app${wake ? ' is-waking' : ''}${focused ? ' is-focused' : ''}`} data-match-mode={matchMode} data-view={view} data-time-of-day={dayPhase} data-backend-state={requestState}>
-    <SpatialEnvironment {...environmentalState} reducedMotion={Boolean(reducedMotion)} timeOfDay={dayPhase} />
+  return <main className={`livepulse-app${wake ? ' is-waking' : ''}${focused ? ' is-focused' : ''}`} data-match-mode={matchMode} data-focus-domain={shownLive.dominant_focus?.domain ?? shownLive.focus.source} data-motion-event={currentVisualEvent?.name.toLowerCase().replaceAll('_', '-') ?? undefined} data-motion-intensity={currentVisualEvent?.intensity ?? undefined} data-view={view} data-time-of-day={dayPhase} data-backend-state={requestState}>
+    <SpatialEnvironment {...environmentalState} reducedMotion={Boolean(reducedMotion)} timeOfDay={dayPhase} eventName={currentVisualEvent?.name ?? null} eventIntensity={currentVisualEvent?.intensity ?? null} />
     <div className="app-shell">
       <nav className="navigation-rail" aria-label="Main navigation">
         <button className="nav-brand-mark" type="button" aria-label="LivePulse home" onClick={() => navigate('home')}><Waves size={22} aria-hidden="true" /></button>
@@ -177,7 +192,7 @@ export default function App() {
             </div>
             <aside className="timeline-environment" aria-label="Recent signals">
               <div className="surface-heading timeline-heading"><span className="surface-icon timeline-icon"><Activity size={16} aria-hidden="true" /></span><div><span className="surface-overline">EVENT CHRONOLOGY</span><h2>Recent signals</h2></div><span className={`timeline-live timeline-${shownConnection.toLowerCase()}`}><i />{shownConnection === 'LIVE' ? 'LIVE' : shownConnection}</span></div>
-              <PulseTimeline items={timelineItems} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => { setTimelineHistory(true); void loadOlder() }} onRefresh={() => { void refresh() }} />
+              <PulseTimeline items={timelineItems} arrivalId={shownEventArrival?.event_id ?? null} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => { setTimelineHistory(true); void loadOlder() }} onRefresh={() => { void refresh() }} />
               <button className="panel-view-all" type="button" onClick={() => { setTimelineHistory(true); navigate('timeline') }}>View all signals <span>→</span></button>
             </aside>
           </div>
@@ -187,7 +202,7 @@ export default function App() {
           </div>
         </section>}
 
-        {view === 'timeline' && <section className="page-surface timeline-page"><header className="page-title"><span className="surface-overline">UNIVERSAL EVENT HISTORY</span><h2>Pulse Timeline</h2><p>Provider events arranged by observed time, with source and freshness preserved.</p></header><PulseTimeline items={shownTimeline} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => void loadOlder()} onRefresh={() => { void refresh() }} /></section>}
+        {view === 'timeline' && <section className="page-surface timeline-page"><header className="page-title"><span className="surface-overline">UNIVERSAL EVENT HISTORY</span><h2>Pulse Timeline</h2><p>Provider events arranged by observed time, with source and freshness preserved.</p></header><PulseTimeline items={shownTimeline} arrivalId={shownEventArrival?.event_id ?? null} hasOlder={hasOlder} loadingOlder={loadingOlder} onLoadOlder={() => void loadOlder()} onRefresh={() => { void refresh() }} /></section>}
 
         {view === 'focus' && <section className="page-surface focus-page"><header className="page-title"><span className="surface-overline">ATTENTION POSTURE</span><h2>Focus</h2><p>A deterministic quiet window. Critical match events and system alerts continue to surface.</p></header><FocusTimer snapshotOverride={visualFixture?.focusTimer} /><div className="focus-principles"><span><i /> Peripheral surfaces recede</span><span><i /> Critical events remain visible</span><span><i /> Spotify controls stay available</span></div><button className="text-action" type="button" onClick={() => navigate('home')}>Return to Home →</button></section>}
 
