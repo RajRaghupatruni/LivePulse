@@ -20,6 +20,7 @@ from app.projections import projector
 from app.providers.base import PollContext
 from app.providers.commands import CommandRequest
 from app.providers.credentials import CredentialCipher, EncryptedCredentials
+from app.providers.oauth_completion import OAuthCompletionMode
 from app.providers.scheduler import RetryAfterError
 from app.providers.spotify.auth import (
     OAuthStateStore,
@@ -189,6 +190,10 @@ async def test_oauth_state_is_random_expiring_one_use_and_callback_rejects_misma
     assert states.consume(first)
     assert not states.consume(first)
 
+    desktop_state = states.create(OAuthCompletionMode.DESKTOP)
+    assert states.consume_mode(desktop_state) is OAuthCompletionMode.DESKTOP
+    assert states.consume_mode(desktop_state) is None
+
     expiring = states.create()
     clock.value += timedelta(seconds=5)
     assert not states.consume(expiring)
@@ -261,7 +266,12 @@ async def test_oauth_state_is_random_expiring_one_use_and_callback_rejects_misma
 
             mismatch = await browser.get(
                 "/api/v1/providers/spotify/oauth/callback",
-                params={"state": "wrong-state", "code": "authorization-code-secret"},
+                params={
+                    "state": "wrong-state",
+                    "code": "authorization-code-secret",
+                    "completion": "desktop",
+                    "redirect": "https://evil.example",
+                },
             )
             assert mismatch.status_code == 303
             mismatch_url = urlsplit(mismatch.headers["location"])
@@ -312,9 +322,47 @@ async def test_oauth_state_is_random_expiring_one_use_and_callback_rejects_misma
             assert callback_url.path == "/"
             assert parse_qs(callback_url.query) == {"spotify": ["connected"]}
             assert callback_url.netloc != "127.0.0.1:8000"
-            assert token_request_assertions == [True]
             assert "access-secret" not in callback.text
             assert "refresh-secret" not in callback.text
+            assert "authorization-code-secret" not in caplog.text
+
+            desktop_start = await browser.get(
+                "/api/v1/providers/spotify/oauth/start?completion=desktop",
+                follow_redirects=False,
+            )
+            desktop_authorization = parse_qs(urlsplit(desktop_start.headers["location"]).query)
+            assert desktop_authorization["scope"] == [
+                "user-read-playback-state user-modify-playback-state"
+            ]
+            desktop_state = desktop_authorization["state"][0]
+            desktop_denied_state = provider.state_store.create(OAuthCompletionMode.DESKTOP)
+            desktop_denied = await browser.get(
+                "/api/v1/providers/spotify/oauth/callback",
+                params={
+                    "state": desktop_denied_state,
+                    "error": "access_denied",
+                    "error_description": "private provider detail",
+                },
+            )
+            assert desktop_denied.status_code == 200
+            assert "Spotify connection not completed" in desktop_denied.text
+            assert "Authorization was denied" in desktop_denied.text
+            assert "private provider detail" not in desktop_denied.text
+            assert desktop_denied.headers["cache-control"] == "no-store, max-age=0"
+            assert desktop_denied.headers["content-security-policy"].startswith(
+                "default-src 'none'"
+            )
+
+            desktop_callback = await browser.get(
+                "/api/v1/providers/spotify/oauth/callback",
+                params={"state": desktop_state, "code": "authorization-code-secret"},
+            )
+            assert desktop_callback.status_code == 200
+            assert "Spotify connected to LivePulse" in desktop_callback.text
+            assert "authorization-code-secret" not in desktop_callback.text
+            assert "access-secret" not in desktop_callback.text
+            assert "refresh-secret" not in desktop_callback.text
+            assert token_request_assertions == [True, True]
             assert "authorization-code-secret" not in caplog.text
 
             assert store.encrypted_blob is not None
@@ -327,7 +375,7 @@ async def test_oauth_state_is_random_expiring_one_use_and_callback_rejects_misma
             assert status.json()["connected"] is True
             assert "access-secret" not in status.text and "refresh-secret" not in status.text
             assert "scopes" not in status.text
-            assert logged_callback_queries == [b"", b"", b"", b""]
+            assert logged_callback_queries == [b"", b"", b"", b"", b"", b""]
 
             disconnected = await browser.delete("/api/v1/providers/spotify/connection")
             assert disconnected.status_code == 200

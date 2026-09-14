@@ -78,11 +78,13 @@ export function useSystemHealth() {
       if (document.visibilityState === 'visible') void poll()
     }
     document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('livepulse:refresh-provider-health', scheduleNow)
     return () => {
       disposed = true
       unsubscribe()
       window.clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('livepulse:refresh-provider-health', scheduleNow)
     }
   }, [refresh])
 

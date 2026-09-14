@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUpRight, Inbox, Mail, RefreshCw, Star } from 'lucide-react'
-import { getGmailInbox, getGmailMessage, type GmailInbox as InboxSnapshot, type GmailMessage } from '../../lib/api'
-import { beginAuthorization, launchExternal } from '../../lib/platform'
+import { getGmailConnection, getGmailInbox, getGmailMessage, type GmailInbox as InboxSnapshot, type GmailMessage } from '../../lib/api'
+import { useProviderAuthorization } from '../../hooks/useProviderAuthorization'
+import { launchExternal } from '../../lib/platform'
 import type { ProviderHealth } from '../../types/livepulse'
 
 function shortTime(value: string) {
@@ -19,6 +20,7 @@ export function GmailPanel({ provider, expanded = false, showAll = false, onView
   const [selected, setSelected] = useState<GmailMessage | null>(null)
   const [detail, setDetail] = useState<GmailMessage | null>(null)
   const [callbackMessage, setCallbackMessage] = useState('')
+  const authorization = useProviderAuthorization()
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const viewAllTriggerRef = useRef<HTMLButtonElement | null>(null)
   const expandedCloseRef = useRef<HTMLButtonElement | null>(null)
@@ -65,6 +67,15 @@ export function GmailPanel({ provider, expanded = false, showAll = false, onView
       setLoadingFromProvider(false)
     }
   }, [expanded, provider?.configured])
+
+  const connectGmail = () => authorization.start(
+    '/api/v1/providers/gmail/oauth/start',
+    getGmailConnection,
+    refresh,
+  )
+  const connectButton = <button type="button" className="text-action" disabled={authorization.phase === 'waiting'} onClick={() => void connectGmail()}>
+    {authorization.phase === 'waiting' ? 'Connecting…' : authorization.phase === 'timeout' || authorization.phase === 'error' ? 'Retry connection' : 'Connect account'} <ArrowUpRight size={13} />
+  </button>
 
   useEffect(() => {
     if (snapshotOverride) return
@@ -151,8 +162,9 @@ export function GmailPanel({ provider, expanded = false, showAll = false, onView
       <button className="surface-refresh" type="button" aria-label="Refresh Gmail" onClick={() => { setLoadingFromProvider(true); void refresh() }}><RefreshCw size={14} /></button>
     </header>
     {callbackMessage && <p className="gmail-oauth-feedback" role="status">{callbackMessage}</p>}
+    {authorization.message && <p className="gmail-oauth-feedback" role="status">{authorization.message}</p>}
     {loading && !inbox ? <div className="gmail-state"><span className="quiet-spinner" /><strong>Resolving inbox</strong><small>Read-only metadata from your connected account</small></div>
-      : configured === false || status === 'not_configured' || status === 'disconnected' ? <div className="gmail-state gmail-state-setup"><Inbox size={19} /><strong>{configured === false ? 'Gmail setup required' : 'Reconnect Gmail'}</strong><small>{configured === false ? 'Add Google OAuth credentials and local encryption configuration to the backend.' : 'Read-only access. Message bodies are not retained.'}</small>{configured !== false && <button type="button" className="text-action" onClick={() => void beginAuthorization('/api/v1/providers/gmail/oauth/start')}>Connect account <ArrowUpRight size={13} /></button>}</div>
+      : configured === false || status === 'not_configured' || status === 'disconnected' ? <div className="gmail-state gmail-state-setup"><Inbox size={19} /><strong>{configured === false ? 'Gmail setup required' : 'Reconnect Gmail'}</strong><small>{configured === false ? 'Add Google OAuth credentials and local encryption configuration to the backend.' : 'Read-only access. Message bodies are not retained.'}</small>{configured !== false && connectButton}</div>
         : status === 'unavailable' || !inbox ? <div className="gmail-state"><span className="state-mark state-mark-warning" /><strong>Inbox unavailable</strong><small>System Pulse has the provider freshness details.</small></div>
           : inbox.messages.length === 0 ? <div className="gmail-state"><Inbox size={18} /><strong>Inbox is clear</strong><small>No recent message metadata was returned.</small></div>
             : renderMessages()}
@@ -161,7 +173,7 @@ export function GmailPanel({ provider, expanded = false, showAll = false, onView
       <section ref={expandedDialogRef} className="gmail-expanded-dialog" role="dialog" aria-modal="true" aria-labelledby="gmail-expanded-title" onKeyDown={trapExpandedTab}>
         <header><div><span>PERSONAL INBOX · READ ONLY</span><h2 id="gmail-expanded-title">Recent messages</h2><p>Bounded message metadata from the connected account.</p></div><button ref={expandedCloseRef} type="button" onClick={closeAll} aria-label="Close expanded Gmail inbox">×</button></header>
         {loading && !inbox ? <div className="gmail-state"><span className="quiet-spinner" /><strong>Resolving inbox</strong><small>Read-only metadata from your connected account</small></div>
-          : configured === false || status === 'not_configured' || status === 'disconnected' ? <div className="gmail-state gmail-state-setup"><Inbox size={19} /><strong>{configured === false ? 'Gmail setup required' : 'Reconnect Gmail'}</strong><small>{configured === false ? 'Add Google OAuth credentials and local encryption configuration to the backend.' : 'Read-only access. Message bodies are not retained.'}</small>{configured !== false && <button type="button" className="text-action" onClick={() => void beginAuthorization('/api/v1/providers/gmail/oauth/start')}>Connect account <ArrowUpRight size={13} /></button>}</div>
+          : configured === false || status === 'not_configured' || status === 'disconnected' ? <div className="gmail-state gmail-state-setup"><Inbox size={19} /><strong>{configured === false ? 'Gmail setup required' : 'Reconnect Gmail'}</strong><small>{configured === false ? 'Add Google OAuth credentials and local encryption configuration to the backend.' : 'Read-only access. Message bodies are not retained.'}</small>{configured !== false && connectButton}</div>
             : status === 'unavailable' || !inbox ? <div className="gmail-state"><span className="state-mark state-mark-warning" /><strong>Inbox unavailable</strong><small>System Pulse has the provider freshness details.</small></div>
               : inbox.messages.length === 0 ? <div className="gmail-state"><Inbox size={18} /><strong>Inbox is clear</strong><small>No recent message metadata was returned.</small></div>
                 : renderMessages('gmail-expanded-list')}

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlencode
-
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 from app.core.errors import LivePulseError
 from app.providers.commands import CommandRequest, CommandResult
+from app.providers.oauth_completion import OAuthCompletionMode, oauth_result
 from app.providers.spotify.auth import OAuthStateStore, SpotifyOAuthError
 from app.providers.spotify.client import (
     SpotifyApiError,
@@ -31,19 +30,22 @@ def create_spotify_router(
     oauth_state = state_store or instance.state_store
     router = APIRouter(prefix="/api/v1/providers/spotify", tags=["spotify"])
 
-    def frontend_result(result: str, reason: str | None = None) -> RedirectResponse:
-        query = {"spotify": result}
-        if reason is not None:
-            query["reason"] = reason
-        frontend_url = instance.settings_getter().frontend_base_url.rstrip("/")
-        return RedirectResponse(f"{frontend_url}/?{urlencode(query)}", status_code=303)
-
     @router.get("/oauth/start", include_in_schema=True)
-    async def start_authorization() -> RedirectResponse:
-        state = oauth_state.create()
+    async def start_authorization(
+        completion: OAuthCompletionMode = Query(default=OAuthCompletionMode.BROWSER),
+    ) -> Response:
+        state = oauth_state.create(completion)
         try:
             url = instance.oauth.authorization_url(state)
         except SpotifyOAuthError as exc:
+            if completion is OAuthCompletionMode.DESKTOP:
+                return oauth_result(
+                    "spotify",
+                    completion,
+                    connected=False,
+                    frontend_base_url=instance.settings_getter().frontend_base_url,
+                    reason="setup_required",
+                )
             raise LivePulseError(exc.detail_code, "Spotify OAuth is not configured", 503) from None
         return RedirectResponse(url, status_code=302)
 
@@ -53,26 +55,56 @@ def create_spotify_router(
         state: str | None = Query(default=None),
         code: str | None = Query(default=None),
         error: str | None = Query(default=None),
-    ) -> RedirectResponse:
+    ) -> Response:
         # Uvicorn logs the request path when it sends the response. Strip the OAuth query
         # after FastAPI has parsed it so authorization codes never enter access logs.
         request.scope["query_string"] = b""
-        if not oauth_state.consume(state):
-            return frontend_result("error", "state_invalid")
+        completion = oauth_state.consume_mode(state)
+        if completion is None:
+            return oauth_result(
+                "spotify",
+                OAuthCompletionMode.BROWSER,
+                connected=False,
+                frontend_base_url=instance.settings_getter().frontend_base_url,
+                reason="state_invalid",
+            )
         if error is not None:
-            return frontend_result("error", "authorization_denied")
+            return oauth_result(
+                "spotify",
+                completion,
+                connected=False,
+                frontend_base_url=instance.settings_getter().frontend_base_url,
+                reason="authorization_denied",
+            )
         if not code:
-            return frontend_result("error", "authorization_incomplete")
+            return oauth_result(
+                "spotify",
+                completion,
+                connected=False,
+                frontend_base_url=instance.settings_getter().frontend_base_url,
+                reason="authorization_incomplete",
+            )
         try:
             await instance.oauth.exchange_authorization_code(code)
         except SpotifyOAuthError:
-            return frontend_result("error", "connection_failed")
+            return oauth_result(
+                "spotify",
+                completion,
+                connected=False,
+                frontend_base_url=instance.settings_getter().frontend_base_url,
+                reason="connection_failed",
+            )
         instance.health.report(
             "healthy",
             "connected",
             configured=instance._configured(),
         )
-        return frontend_result("connected")
+        return oauth_result(
+            "spotify",
+            completion,
+            connected=True,
+            frontend_base_url=instance.settings_getter().frontend_base_url,
+        )
 
     @router.get("/connection", response_model=SpotifyConnectionStatus)
     async def connection_status() -> SpotifyConnectionStatus:

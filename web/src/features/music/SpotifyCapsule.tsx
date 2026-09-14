@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { Disc3, Headphones, Pause, Play, SkipBack, SkipForward, Speaker } from 'lucide-react'
-import { executeSpotifyCommand, getSpotifyDevices, type SpotifyCommand } from '../../lib/api'
-import { beginAuthorization } from '../../lib/platform'
+import { executeSpotifyCommand, getSpotifyConnection, getSpotifyDevices, type SpotifyCommand } from '../../lib/api'
+import { useProviderAuthorization } from '../../hooks/useProviderAuthorization'
 import type { ProviderHealth, SpotifyDevice, SpotifyPlaybackView } from '../../types/livepulse'
 import type { SurfaceSnapshot } from '../../hooks/useProviderSurfaces'
 
@@ -47,6 +47,7 @@ export function SpotifyCapsule({ snapshot, provider }: { snapshot: SurfaceSnapsh
   const [devices, setDevices] = useState<SpotifyDevice[]>([])
   const [deviceMenu, setDeviceMenu] = useState(false)
   const [devicesLoading, setDevicesLoading] = useState(false)
+  const authorization = useProviderAuthorization()
   useEffect(() => {
     const url = new URL(window.location.href)
     const result = url.searchParams.get('spotify')
@@ -92,6 +93,11 @@ export function SpotifyCapsule({ snapshot, provider }: { snapshot: SurfaceSnapsh
     try { setDevices(await getSpotifyDevices()) } catch { setDevices([]); setMessage('Spotify devices could not be loaded') } finally { setDevicesLoading(false) }
   }
   const commandBlocked = ['disconnected', 'auth_failure', 'provider_failure', 'unavailable', 'rate_limited'].includes(provider?.status ?? '')
+  const connectSpotify = () => authorization.start(
+    '/api/v1/providers/spotify/oauth/start',
+    getSpotifyConnection,
+    () => { window.dispatchEvent(new CustomEvent('livepulse:refresh-provider-surfaces', { detail: 'spotify' })) },
+  )
   const available = Boolean(snapshot.available && playbackView && provider?.configured !== false && !commandBlocked)
   const canInspectDevices = Boolean(provider?.configured && !commandBlocked)
   const providerLabel = provider?.configured === false ? 'NOT CONFIGURED'
@@ -112,7 +118,10 @@ export function SpotifyCapsule({ snapshot, provider }: { snapshot: SurfaceSnapsh
       <motion.div className="spotify-copy" key={playbackView?.item_id ?? title} initial={reduceMotion ? false : { opacity: .65, y: 3 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -2 }} transition={{ duration: reduceMotion ? 0 : .22 }}>
         <div className="spotify-topline"><span>LISTENING</span><span className={`play-state${playbackView?.is_playing && providerLabel === 'PLAYING' ? ' is-playing' : ''}`}>{providerLabel}</span></div>
         <strong title={title}>{title}</strong><span title={subtitle}>{subtitle || 'Playback state unavailable'}</span>
-        {provider?.configured && ['disconnected', 'auth_failure'].includes(provider.status) && <button className="spotify-connect" type="button" onClick={() => void beginAuthorization('/api/v1/providers/spotify/oauth/start')}>Connect Spotify</button>}
+        {provider?.configured && ['disconnected', 'auth_failure'].includes(provider.status) && <>
+          <button className="spotify-connect" type="button" disabled={authorization.phase === 'waiting'} onClick={() => void connectSpotify()}>{authorization.phase === 'waiting' ? 'Connecting…' : authorization.phase === 'timeout' || authorization.phase === 'error' ? 'Retry connection' : 'Connect Spotify'}</button>
+          {authorization.message && <span className="spotify-feedback" role="status">{authorization.message}</span>}
+        </>}
         <div className="spotify-progress"><div role="progressbar" aria-label="Track progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)}><i style={{ width: `${progress}%` }} /></div><small>{playbackView ? `${formatTime(elapsed)} / ${formatTime(duration)}` : provider?.configured === false ? 'Not configured' : snapshot.available ? 'No active track' : '—'}</small></div>
         {message && <span className="spotify-feedback" role="status">{message}</span>}
       </motion.div>

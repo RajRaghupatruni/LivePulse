@@ -12,16 +12,17 @@ export async function initializeTauriPlatform(): Promise<boolean> {
 
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
   const appWindow = getCurrentWindow()
+  const openExternal = async (url: string) => {
+    const parsed = new URL(url)
+    if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Only web URLs can be opened externally')
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    await openUrl(parsed)
+  }
   const adapter: LivePulsePlatformAdapter = {
     kind: 'desktop',
     apiBaseUrl,
     websocketBaseUrl,
-    openExternal: async (url) => {
-      const parsed = new URL(url)
-      if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Only web URLs can be opened externally')
-      const { openUrl } = await import('@tauri-apps/plugin-opener')
-      await openUrl(parsed)
-    },
+    openExternal,
     requestFullscreen: async () => {
       await appWindow.setFullscreen(!(await appWindow.isFullscreen()))
     },
@@ -29,9 +30,12 @@ export async function initializeTauriPlatform(): Promise<boolean> {
       if (await appWindow.isMaximized()) await appWindow.unmaximize()
       else await appWindow.maximize()
     },
-    beginAuthorization: (path) => {
-      // OAuth begins at the backend, which remains the sole owner of client secrets and tokens.
-      window.location.assign(new URL(path, `${apiBaseUrl}/`).href)
+    beginAuthorization: async (path) => {
+      // The system browser handles the provider redirect; completion mode is a fixed enum,
+      // while OAuth state remains the authority for the callback experience.
+      const url = new URL(path, `${apiBaseUrl}/`)
+      url.searchParams.set('completion', 'desktop')
+      await openExternal(url.href)
     },
   }
   window.livePulsePlatform = adapter

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.providers.credentials import CredentialCipher, CredentialEncryptionError
+from app.providers.oauth_completion import OAuthCompletionMode
 from app.storage.models import ProviderConnectionRow
 
 SPOTIFY_PROVIDER = "spotify"
@@ -119,32 +120,40 @@ class OAuthStateStore:
             raise ValueError("OAuth state TTL must be positive")
         self._ttl = ttl
         self._clock = clock
-        self._states: dict[str, datetime] = {}
+        self._states: dict[str, tuple[datetime, OAuthCompletionMode]] = {}
 
-    def create(self) -> str:
+    def create(
+        self,
+        completion_mode: OAuthCompletionMode | str = OAuthCompletionMode.BROWSER,
+    ) -> str:
+        if not isinstance(completion_mode, OAuthCompletionMode):
+            completion_mode = OAuthCompletionMode(completion_mode)
         now = _utc(self._clock())
         self._discard_expired(now)
         state = secrets.token_urlsafe(32)
-        self._states[state] = now + self._ttl
+        self._states[state] = (now + self._ttl, completion_mode)
         return state
 
     def consume(self, supplied_state: str | None) -> bool:
+        return self.consume_mode(supplied_state) is not None
+
+    def consume_mode(self, supplied_state: str | None) -> OAuthCompletionMode | None:
         now = _utc(self._clock())
         self._discard_expired(now)
         if not supplied_state:
-            return False
+            return None
         for expected in tuple(self._states):
             try:
                 matches = hmac.compare_digest(expected, supplied_state)
             except TypeError:
-                return False
+                return None
             if matches:
-                del self._states[expected]
-                return True
-        return False
+                expires_at, completion_mode = self._states.pop(expected)
+                return completion_mode if expires_at > now else None
+        return None
 
     def _discard_expired(self, now: datetime) -> None:
-        for state, expires_at in tuple(self._states.items()):
+        for state, (expires_at, _mode) in tuple(self._states.items()):
             if expires_at <= now:
                 del self._states[state]
 

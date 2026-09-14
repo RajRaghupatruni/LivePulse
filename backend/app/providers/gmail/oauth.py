@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.providers.credentials import CredentialCipher, CredentialEncryptionError
+from app.providers.oauth_completion import OAuthCompletionMode
 from app.storage.models import ProviderConnectionRow
 
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
@@ -62,8 +63,14 @@ def install_oauth_access_log_filter() -> None:
 class OAuthError(RuntimeError):
     """An OAuth failure with a safe, stable detail code."""
 
-    def __init__(self, detail_code: str) -> None:
+    def __init__(
+        self,
+        detail_code: str,
+        *,
+        completion_mode: OAuthCompletionMode | None = None,
+    ) -> None:
         self.detail_code = detail_code
+        self.completion_mode = completion_mode
         super().__init__(detail_code)
 
 
@@ -73,37 +80,52 @@ class OAuthStateStore:
     def __init__(self, secret: SecretStr | str, *, ttl: timedelta = timedelta(minutes=10)) -> None:
         self._secret = secret.get_secret_value() if isinstance(secret, SecretStr) else secret
         self._ttl = ttl
-        self._issued: dict[str, float] = {}
+        self._issued: dict[str, tuple[float, OAuthCompletionMode]] = {}
         self._lock = asyncio.Lock()
 
-    async def issue(self) -> str:
+    async def issue(
+        self,
+        completion_mode: OAuthCompletionMode | str = OAuthCompletionMode.BROWSER,
+    ) -> str:
+        if not isinstance(completion_mode, OAuthCompletionMode):
+            completion_mode = OAuthCompletionMode(completion_mode)
         nonce = secrets.token_urlsafe(32)
         signature = hmac.new(self._secret.encode(), nonce.encode(), hashlib.sha256).hexdigest()
         state = f"{nonce}.{signature}"
         async with self._lock:
             self._prune(time.monotonic())
-            self._issued[state] = time.monotonic() + self._ttl.total_seconds()
+            self._issued[state] = (time.monotonic() + self._ttl.total_seconds(), completion_mode)
         return state
 
     async def consume(self, state: str) -> bool:
+        return await self.consume_mode(state) is not None
+
+    async def consume_mode(self, state: str) -> OAuthCompletionMode | None:
         if not isinstance(state, str) or len(state) > 200:
-            return False
+            return None
         nonce, separator, signature = state.partition(".")
         if not separator or not nonce or not signature:
-            return False
+            return None
         expected = hmac.new(self._secret.encode(), nonce.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(signature, expected):
-            return False
+            return None
         now = time.monotonic()
         async with self._lock:
-            expires_at = self._issued.pop(state, None)
+            issued = self._issued.pop(state, None)
             self._prune(now)
-        return expires_at is not None and expires_at >= now
+        if issued is None:
+            return None
+        expires_at, completion_mode = issued
+        return completion_mode if expires_at >= now else None
 
     def _prune(self, now: float) -> None:
-        self._issued = {state: expiry for state, expiry in self._issued.items() if expiry >= now}
+        self._issued = {
+            state: issued for state, issued in self._issued.items() if issued[0] >= now
+        }
         if len(self._issued) > 1000:
-            for state, _expiry in sorted(self._issued.items(), key=lambda pair: pair[1])[:500]:
+            for state, _issued in sorted(
+                self._issued.items(), key=lambda pair: pair[1][0]
+            )[:500]:
                 self._issued.pop(state, None)
 
 
@@ -162,18 +184,39 @@ class GoogleOAuth:
             )
         }"
 
-    async def begin(self) -> str:
+    async def begin(
+        self,
+        completion_mode: OAuthCompletionMode = OAuthCompletionMode.BROWSER,
+    ) -> str:
         if not self.settings.provider_configuration()["gmail"] or self.states is None:
             raise OAuthError("oauth_not_configured")
         if not encryption_key_configured(self.settings):
             raise OAuthError("credential_encryption_unavailable")
-        return self.authorization_url(await self.states.issue())
+        return self.authorization_url(await self.states.issue(completion_mode))
 
-    async def complete(self, *, state: str, code: str) -> None:
+    async def consume_state(self, state: str) -> OAuthCompletionMode:
         if not self.settings.provider_configuration()["gmail"] or self.states is None:
             raise OAuthError("oauth_not_configured")
-        if not await self.states.consume(state):
+        completion_mode = await self.states.consume_mode(state)
+        if completion_mode is None:
             raise OAuthError("oauth_state_invalid")
+        return completion_mode
+
+    async def complete(self, *, state: str, code: str) -> OAuthCompletionMode:
+        completion_mode = await self.consume_state(state)
+        try:
+            await self._complete_authorized(code=code)
+        except OAuthError as exc:
+            raise OAuthError(exc.detail_code, completion_mode=completion_mode) from exc
+        except httpx.HTTPError as exc:
+            raise OAuthError(
+                "authorization_exchange_failed", completion_mode=completion_mode
+            ) from exc
+        return completion_mode
+
+    async def _complete_authorized(self, *, code: str) -> None:
+        if not self.settings.provider_configuration()["gmail"]:
+            raise OAuthError("oauth_not_configured")
         if not code or len(code) > 4096:
             raise OAuthError("authorization_code_invalid")
         token = await self._exchange_code(code)

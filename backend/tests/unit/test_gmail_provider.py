@@ -33,7 +33,7 @@ from app.providers.gmail.oauth import (
     _decrypt_tokens,
     _encrypt_tokens,
 )
-from app.providers.gmail.router import oauth_callback
+from app.providers.gmail.router import gmail_connection, oauth_callback
 from app.providers.gmail.service import GmailReadOnlyService
 from app.providers.gmail.sync import (
     HISTORY_CHECKPOINT,
@@ -41,6 +41,7 @@ from app.providers.gmail.sync import (
     GmailSyncSource,
     ingest_gmail_observations,
 )
+from app.providers.oauth_completion import OAuthCompletionMode
 from app.providers.scheduler import RetryAfterError, next_poll_delay
 from app.providers.status import ProviderHealthRegistry
 from app.storage.models import (
@@ -159,6 +160,10 @@ async def test_oauth_state_is_signed_expiring_and_one_time() -> None:
     assert await store.consume(state)
     assert not await store.consume(state)
 
+    desktop_state = await store.issue(OAuthCompletionMode.DESKTOP)
+    assert await store.consume_mode(desktop_state) is OAuthCompletionMode.DESKTOP
+    assert await store.consume_mode(desktop_state) is None
+
     expired = await store.issue()
     import asyncio
 
@@ -179,6 +184,10 @@ async def test_authorization_code_exchange_persists_only_encrypted_readonly_toke
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         oauth = GoogleOAuth(google_settings, db_factory, http)
+        desktop_url = await oauth.begin(OAuthCompletionMode.DESKTOP)
+        desktop_state = parse_qs(urlparse(desktop_url).query)["state"][0]
+        assert await oauth.consume_state(desktop_state) is OAuthCompletionMode.DESKTOP
+
         url = await oauth.begin()
         params = parse_qs(urlparse(url).query)
         assert params["scope"] == [GMAIL_READONLY_SCOPE]
@@ -188,7 +197,10 @@ async def test_authorization_code_exchange_persists_only_encrypted_readonly_toke
         assert "gmail.modify" not in url and "mail.google.com" not in url
         assert "server-only-client-secret" not in url
         state = params["state"][0]
-        await oauth.complete(state=state, code="mock-authorization-code")
+        assert (
+            await oauth.complete(state=state, code="mock-authorization-code")
+            is OAuthCompletionMode.BROWSER
+        )
         with pytest.raises(OAuthError, match="oauth_state_invalid"):
             await oauth.complete(state=state, code="replay-code")
 
@@ -209,21 +221,47 @@ async def test_authorization_code_exchange_persists_only_encrypted_readonly_toke
 
 
 @pytest.mark.asyncio
+async def test_gmail_connection_snapshot_is_safe_and_tracks_encrypted_connection(
+    monkeypatch, db_factory, google_settings
+) -> None:
+    import importlib
+
+    gmail_router = importlib.import_module("app.providers.gmail.router")
+    monkeypatch.setattr(gmail_router, "get_settings", lambda: google_settings)
+    monkeypatch.setattr(gmail_router, "SessionFactory", db_factory)
+
+    disconnected = await gmail_connection()
+    assert disconnected.connected is False
+    assert disconnected.status == "disconnected"
+
+    await _seed_connection(db_factory, google_settings)
+    connected = await gmail_connection()
+    assert connected.connected is True
+    assert connected.status == "connected"
+    assert "token" not in connected.model_dump_json()
+
+
+@pytest.mark.asyncio
 async def test_gmail_oauth_callback_redirects_to_frontend_with_bounded_results(
     monkeypatch, google_settings
 ) -> None:
     import importlib
 
     gmail_router = importlib.import_module("app.providers.gmail.router")
-    issued = {"denied-state", "incomplete-state", "failed-state", "success-state"}
+    issued = {
+        "denied-state": OAuthCompletionMode.BROWSER,
+        "incomplete-state": OAuthCompletionMode.BROWSER,
+        "failed-state": OAuthCompletionMode.BROWSER,
+        "success-state": OAuthCompletionMode.BROWSER,
+        "desktop-denied-state": OAuthCompletionMode.DESKTOP,
+        "desktop-failed-state": OAuthCompletionMode.DESKTOP,
+        "desktop-success-state": OAuthCompletionMode.DESKTOP,
+    }
     completed: list[tuple[str, str]] = []
 
     class StateStore:
-        async def consume(self, state: str) -> bool:
-            if state not in issued:
-                return False
-            issued.remove(state)
-            return True
+        async def consume_mode(self, state: str) -> OAuthCompletionMode | None:
+            return issued.pop(state, None)
 
     states = StateStore()
 
@@ -231,12 +269,18 @@ async def test_gmail_oauth_callback_redirects_to_frontend_with_bounded_results(
         def __init__(self, *_args, **_kwargs) -> None:
             self.states = states
 
-        async def complete(self, *, state: str, code: str) -> None:
-            if not await self.states.consume(state):
+        async def consume_state(self, state: str) -> OAuthCompletionMode:
+            mode = await self.states.consume_mode(state)
+            if mode is None:
                 raise OAuthError("oauth_state_invalid")
+            return mode
+
+        async def complete(self, *, state: str, code: str) -> OAuthCompletionMode:
+            mode = await self.consume_state(state)
             completed.append((state, code))
             if code == "exchange-failure-code":
-                raise OAuthError("authorization_exchange_failed")
+                raise OAuthError("authorization_exchange_failed", completion_mode=mode)
+            return mode
 
     monkeypatch.setattr(gmail_router, "get_settings", lambda: google_settings)
     monkeypatch.setattr(gmail_router, "GoogleOAuth", FakeGoogleOAuth)
@@ -252,16 +296,19 @@ async def test_gmail_oauth_callback_redirects_to_frontend_with_bounded_results(
             }
         )
         response = await oauth_callback(request)
+        return response
+
+    def redirect(response):
         assert response.status_code == 303
         return urlparse(response.headers["location"])
 
-    denied = await invoke(
+    denied = redirect(await invoke(
         {
             "state": "denied-state",
             "error": "access_denied",
             "error_description": "provider-private-detail",
         }
-    )
+    ))
     assert denied.scheme == "http" and denied.netloc == "127.0.0.1:5173"
     assert parse_qs(denied.query) == {
         "gmail": ["error"],
@@ -269,26 +316,35 @@ async def test_gmail_oauth_callback_redirects_to_frontend_with_bounded_results(
     }
     assert "provider-private-detail" not in denied.geturl()
 
-    invalid_state = await invoke({"state": "forged-state", "error": "access_denied"})
+    invalid_state = redirect(
+        await invoke(
+            {
+                "state": "forged-state",
+                "error": "access_denied",
+                "completion": "desktop",
+                "redirect": "https://evil.example",
+            }
+        )
+    )
     assert parse_qs(invalid_state.query) == {
         "gmail": ["error"],
         "reason": ["state_invalid"],
     }
 
-    incomplete = await invoke({"state": "incomplete-state"})
+    incomplete = redirect(await invoke({"state": "incomplete-state"}))
     assert parse_qs(incomplete.query) == {
         "gmail": ["error"],
         "reason": ["authorization_incomplete"],
     }
 
-    failed = await invoke({"state": "failed-state", "code": "exchange-failure-code"})
+    failed = redirect(await invoke({"state": "failed-state", "code": "exchange-failure-code"}))
     assert parse_qs(failed.query) == {
         "gmail": ["error"],
         "reason": ["connection_failed"],
     }
     assert "exchange-failure-code" not in failed.geturl()
 
-    connected = await invoke({"state": "success-state", "code": "one-time-code"})
+    connected = redirect(await invoke({"state": "success-state", "code": "one-time-code"}))
     assert connected.scheme == "http" and connected.netloc == "127.0.0.1:5173"
     assert connected.path == "/"
     assert parse_qs(connected.query) == {"gmail": ["connected"]}
@@ -296,6 +352,34 @@ async def test_gmail_oauth_callback_redirects_to_frontend_with_bounded_results(
     assert completed == [
         ("failed-state", "exchange-failure-code"),
         ("success-state", "one-time-code"),
+    ]
+
+    desktop_denied = await invoke({"state": "desktop-denied-state", "error": "access_denied"})
+    assert desktop_denied.status_code == 200
+    assert "Gmail connection not completed" in desktop_denied.body.decode()
+    assert "Authorization was denied" in desktop_denied.body.decode()
+    assert desktop_denied.headers["cache-control"] == "no-store, max-age=0"
+    assert desktop_denied.headers["content-security-policy"].startswith("default-src 'none'")
+    assert "access_denied" not in desktop_denied.body.decode()
+
+    desktop_failed = await invoke(
+        {"state": "desktop-failed-state", "code": "exchange-failure-code"}
+    )
+    assert desktop_failed.status_code == 200
+    assert "Gmail connection not completed" in desktop_failed.body.decode()
+    assert "Connection failed" in desktop_failed.body.decode()
+    assert "exchange-failure-code" not in desktop_failed.body.decode()
+
+    desktop_success = await invoke(
+        {"state": "desktop-success-state", "code": "desktop-private-code", "redirect": "https://evil.example"}
+    )
+    assert desktop_success.status_code == 200
+    assert "Gmail connected to LivePulse" in desktop_success.body.decode()
+    assert "desktop-private-code" not in desktop_success.body.decode()
+    assert "https://evil.example" not in desktop_success.body.decode()
+    assert completed[-2:] == [
+        ("desktop-failed-state", "exchange-failure-code"),
+        ("desktop-success-state", "desktop-private-code"),
     ]
 
 

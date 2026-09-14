@@ -1,10 +1,9 @@
 """Modular browser-facing Google OAuth routes; token material stays server-side."""
 
-from urllib.parse import urlencode
-
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import delete, select
 
 from app.core.config import RuntimeMode, get_settings
@@ -13,9 +12,11 @@ from app.providers.gmail.models import GmailMessageMetadata
 from app.providers.gmail.oauth import (
     GoogleOAuth,
     OAuthError,
+    encryption_key_configured,
     install_oauth_access_log_filter,
 )
 from app.providers.gmail.service import GmailReadOnlyService
+from app.providers.oauth_completion import OAuthCompletionMode, oauth_result
 from app.providers.status import provider_health
 from app.storage.database import SessionFactory
 from app.storage.models import ProviderCheckpointRow, ProviderConnectionRow
@@ -25,12 +26,27 @@ connection_router = APIRouter(prefix="/api/v1/providers/gmail", tags=["gmail"])
 install_oauth_access_log_filter()
 
 
-def _frontend_oauth_result(result: str, reason: str | None = None) -> RedirectResponse:
-    query = {"gmail": result}
-    if reason is not None:
-        query["reason"] = reason
-    frontend_url = get_settings().frontend_base_url.rstrip("/")
-    return RedirectResponse(f"{frontend_url}/?{urlencode(query)}", status_code=303)
+def _oauth_result(
+    result: str,
+    reason: str | None = None,
+    mode: OAuthCompletionMode = OAuthCompletionMode.BROWSER,
+) -> Response:
+    return oauth_result(
+        "gmail",
+        mode,
+        connected=result == "connected",
+        frontend_base_url=get_settings().frontend_base_url,
+        reason=reason,
+    )
+
+
+class GmailConnectionStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: str = "gmail"
+    configured: bool
+    connected: bool
+    status: str
 
 
 @connection_router.delete("/connection")
@@ -56,6 +72,43 @@ async def disconnect_gmail() -> dict[str, object]:
         "status": "disconnected",
         "detail_code": "locally_disconnected",
     }
+
+
+@connection_router.get("/connection", response_model=GmailConnectionStatus)
+async def gmail_connection() -> GmailConnectionStatus:
+    """Expose only local connection readiness for the bounded desktop OAuth waiter."""
+    settings = get_settings()
+    configured = (
+        settings.runtime_mode is RuntimeMode.PERSONAL_LOCAL
+        and settings.provider_configuration()["gmail"]
+    )
+    if not configured:
+        return GmailConnectionStatus(
+            configured=False, connected=False, status="not_configured"
+        )
+    if not encryption_key_configured(settings):
+        return GmailConnectionStatus(
+            configured=True, connected=False, status="setup_required"
+        )
+    try:
+        async with SessionFactory() as session:
+            connection = await session.scalar(
+                select(ProviderConnectionRow).where(ProviderConnectionRow.provider == "gmail")
+            )
+    except Exception:
+        return GmailConnectionStatus(
+            configured=True, connected=False, status="unavailable"
+        )
+    connected = bool(
+        connection
+        and connection.status == "connected"
+        and connection.encrypted_credentials is not None
+    )
+    return GmailConnectionStatus(
+        configured=True,
+        connected=connected,
+        status="connected" if connected else "disconnected",
+    )
 
 
 @connection_router.get("/messages")
@@ -121,36 +174,46 @@ def _message_payload(message: GmailMessageMetadata) -> dict[str, object]:
 
 
 @router.get("/start", include_in_schema=False)
-async def oauth_start() -> RedirectResponse:
+async def oauth_start(
+    completion: OAuthCompletionMode = Query(default=OAuthCompletionMode.BROWSER),
+) -> Response:
     settings = get_settings()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as http:
-            target = await GoogleOAuth(settings, SessionFactory, http).begin()
+            target = await GoogleOAuth(settings, SessionFactory, http).begin(completion)
     except OAuthError as exc:
+        if completion is OAuthCompletionMode.DESKTOP:
+            return _oauth_result("error", "setup_required", completion)
         raise _http_error(exc) from exc
     return RedirectResponse(target, status_code=302)
 
 
 @router.get("/callback", include_in_schema=False)
-async def oauth_callback(request: Request) -> RedirectResponse:
+async def oauth_callback(request: Request) -> Response:
     settings = get_settings()
     state = request.query_params.get("state", "")
     code = request.query_params.get("code")
     error = request.query_params.get("error")
     if not state or len(state) > 200 or (code is not None and len(code) > 4096):
-        return _frontend_oauth_result("error", "callback_invalid")
+        return _oauth_result("error", "callback_invalid")
     async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as http:
         oauth = GoogleOAuth(settings, SessionFactory, http)
         if oauth.states is None:
-            return _frontend_oauth_result("error", "setup_required")
-        if error or not code:
-            if not await oauth.states.consume(state):
-                return _frontend_oauth_result("error", "state_invalid")
-            if error:
-                return _frontend_oauth_result("error", "authorization_denied")
-            return _frontend_oauth_result("error", "authorization_incomplete")
+            return _oauth_result("error", "setup_required")
+        if error:
+            try:
+                completion = await oauth.consume_state(state)
+            except OAuthError:
+                return _oauth_result("error", "state_invalid")
+            return _oauth_result("error", "authorization_denied", completion)
+        if not code:
+            try:
+                completion = await oauth.consume_state(state)
+            except OAuthError:
+                return _oauth_result("error", "state_invalid")
+            return _oauth_result("error", "authorization_incomplete", completion)
         try:
-            await oauth.complete(state=state, code=code)
+            completion = await oauth.complete(state=state, code=code)
         except OAuthError as exc:
             reason = {
                 "oauth_state_invalid": "state_invalid",
@@ -158,11 +221,13 @@ async def oauth_callback(request: Request) -> RedirectResponse:
                 "oauth_not_configured": "setup_required",
                 "credential_encryption_unavailable": "setup_required",
             }.get(exc.detail_code, "connection_failed")
-            return _frontend_oauth_result("error", reason)
+            return _oauth_result(
+                "error", reason, exc.completion_mode or OAuthCompletionMode.BROWSER
+            )
         except httpx.HTTPError:
-            return _frontend_oauth_result("error", "connection_failed")
+            return _oauth_result("error", "connection_failed")
     provider_health.report("gmail", "degraded", "initial_sync_pending", configured=True)
-    return _frontend_oauth_result("connected")
+    return _oauth_result("connected", mode=completion)
 
 
 @router.get("/complete", include_in_schema=False)
