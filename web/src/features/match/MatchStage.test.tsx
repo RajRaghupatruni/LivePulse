@@ -48,7 +48,7 @@ describe('MatchStage', () => {
   it('keeps the last known match visible while showing provider failure status', () => {
     const fixtures: FootballFixtures = {
       provider_status: 'provider_failure', observed_at: '2026-09-13T01:00:00Z', today: [], live: [],
-      upcoming: [{ fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'scheduled', minute: 0, home_score: null, away_score: null }],
+      upcoming: [{ fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'Not Started', state: 'scheduled', phase: 'pre_match', minute: 0, home_score: null, away_score: null }],
     }
     render(<MatchStage live={liveState} fixtures={fixtures} fixtureLoading={false} fixtureAvailable />)
     expect(screen.getByRole('status')).toHaveTextContent('SOURCE UNAVAILABLE')
@@ -67,7 +67,7 @@ describe('MatchStage', () => {
   it('expands the selected match and closes it with Escape', () => {
     const fixture: FootballFixtures = {
       provider_status: 'healthy', observed_at: '2026-09-13T01:00:00Z', today: [], live: [],
-      upcoming: [{ fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'scheduled', minute: 0, home_score: null, away_score: null }],
+      upcoming: [{ fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'Not Started', state: 'scheduled', phase: 'pre_match', minute: 0, home_score: null, away_score: null }],
     }
     render(<MatchStage live={liveState} fixtures={fixture} fixtureLoading={false} fixtureAvailable />)
     fireEvent.click(screen.getByRole('button', { name: 'View match details' }))
@@ -81,8 +81,8 @@ describe('MatchStage', () => {
     const fixtures: FootballFixtures = {
       provider_status: 'healthy', observed_at: '2026-09-13T01:00:00Z', today: [], live: [],
       upcoming: [
-        { fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'scheduled', minute: 0, home_score: null, away_score: null },
-        { fixture_id: 2, subject_id: 'match-2', competition: 'Premier League', home_team: 'Lakeside AFC', away_team: 'Portside City', kickoff_at: '2030-09-13T21:00:00Z', status: 'scheduled', minute: 0, home_score: null, away_score: null },
+        { fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'Not Started', state: 'scheduled', phase: 'pre_match', minute: 0, home_score: null, away_score: null },
+        { fixture_id: 2, subject_id: 'match-2', competition: 'Premier League', home_team: 'Lakeside AFC', away_team: 'Portside City', kickoff_at: '2030-09-13T21:00:00Z', status: 'Not Started', state: 'scheduled', phase: 'pre_match', minute: 0, home_score: null, away_score: null },
       ],
     }
     render(<MatchStage live={liveState} fixtures={fixtures} fixtureLoading={false} fixtureAvailable />)
@@ -102,20 +102,88 @@ describe('MatchStage', () => {
   it('prefers a live provider observation when the same fixture also appears as scheduled', () => {
     const fixtures: FootballFixtures = {
       provider_status: 'healthy', observed_at: '2026-09-13T01:00:00Z',
-      today: [{ fixture_id: 3, subject_id: 'match-3', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2026-09-13T20:00:00Z', status: 'NS', minute: 0, home_score: null, away_score: null }],
+      today: [{ fixture_id: 3, subject_id: 'match-3', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2026-09-13T20:00:00Z', status: 'Not Started', state: 'scheduled', phase: 'pre_match', minute: 0, home_score: null, away_score: null }],
       upcoming: [],
-      live: [{ fixture_id: 3, subject_id: 'match-3', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2026-09-13T20:00:00Z', status: '2H', minute: 67, home_score: 2, away_score: 1 }],
+      live: [{ fixture_id: 3, subject_id: 'match-3', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2026-09-13T20:00:00Z', status: 'Second Half', state: 'live', phase: 'second_half', minute: 67, home_score: 2, away_score: 1 }],
     }
     render(<MatchStage live={liveState} fixtures={fixtures} fixtureLoading={false} fixtureAvailable />)
 
-    expect(screen.getByRole('region', { name: /67′ · SECOND HALF: Northstar FC versus Harbor United/ })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: /LIVE · 67′ · SECOND HALF: Northstar FC versus Harbor United/ })).toBeInTheDocument()
     expect(screen.getByLabelText('2 to 1')).toBeInTheDocument()
+  })
+
+  it('uses provider match state through kickoff, halftime, and fulltime without a reload', () => {
+    window.localStorage.setItem('livepulse.selected-match.v1', 'fixture-1490480')
+    const kickoffDue: FootballFixtures = {
+      provider_status: 'healthy', observed_at: '2026-09-14T01:40:00Z', today: [], live: [],
+      upcoming: [{ fixture_id: 1490480, subject_id: 'fixture-1490480', competition: 'MLS', home_team: 'San Diego', away_team: 'Philadelphia Union', kickoff_at: new Date(Date.now() - 20_000).toISOString(), status: 'Not Started', state: 'scheduled', phase: 'pre_match', minute: 0, home_score: 0, away_score: 0 }],
+    }
+    const { rerender } = render(<MatchStage live={liveState} fixtures={kickoffDue} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByRole('region', { name: /UPCOMING: San Diego versus Philadelphia Union/ })).toBeInTheDocument()
+    expect(screen.getByText('KICKOFF DUE · AWAITING PROVIDER')).toBeInTheDocument()
+
+    const liveFixture: FootballFixtures = {
+      provider_status: 'healthy', observed_at: '2026-09-14T01:42:00Z', today: [], upcoming: [],
+      live: [{ fixture_id: 1490480, subject_id: 'fixture-1490480', competition: 'MLS', home_team: 'San Diego', away_team: 'Philadelphia Union', kickoff_at: '2026-09-14T01:00:00Z', status: 'First Half', state: 'live', phase: 'first_half', minute: 42, home_score: 0, away_score: 0 }],
+    }
+    rerender(<MatchStage live={liveState} fixtures={liveFixture} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByRole('region', { name: /LIVE · 42′ · FIRST HALF: San Diego versus Philadelphia Union/ })).toBeInTheDocument()
+    expect(screen.getByText('LIVE', { selector: '.match-phase-label' })).toBeInTheDocument()
+    expect(screen.getByLabelText('0 to 0')).toBeInTheDocument()
+    expect(screen.queryByText('UNTIL KICKOFF')).not.toBeInTheDocument()
+    expect(screen.queryByText(/AWAITING PROVIDER/)).not.toBeInTheDocument()
+
+    const halftime: FootballFixtures = { ...liveFixture, live: [{ ...liveFixture.live[0], status: 'Halftime', state: 'halftime', phase: 'halftime', minute: 45 }] }
+    rerender(<MatchStage live={liveState} fixtures={halftime} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByText('HT', { selector: '.match-phase-label' })).toBeInTheDocument()
+    expect(screen.getByText('HALF TIME')).toBeInTheDocument()
+
+    const fulltime: FootballFixtures = { ...liveFixture, live: [], today: [{ ...liveFixture.live[0], status: 'Match Finished', state: 'fulltime', phase: 'fulltime', minute: 90, home_score: 2, away_score: 1 }] }
+    rerender(<MatchStage live={liveState} fixtures={fulltime} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByText('FINAL', { selector: '.match-phase-label' })).toBeInTheDocument()
+    expect(screen.getByLabelText('2 to 1')).toBeInTheDocument()
+    expect(screen.queryByText('UNTIL KICKOFF')).not.toBeInTheDocument()
+  })
+
+  it('does not let a stale pre-match snapshot overwrite a newer live projection', () => {
+    window.localStorage.setItem('livepulse.selected-match.v1', 'fixture-1490480')
+    const staleSnapshot: FootballFixtures = {
+      provider_status: 'healthy', observed_at: '2026-09-14T01:45:00Z', today: [], live: [],
+      upcoming: [{ fixture_id: 1490480, subject_id: 'fixture-1490480', competition: 'MLS', home_team: 'San Diego', away_team: 'Philadelphia Union', kickoff_at: '2026-09-14T01:00:00Z', status: 'Not Started', state: 'scheduled', phase: 'pre_match', minute: 0, home_score: 0, away_score: 0 }],
+    }
+    const projectedLive: LiveState = {
+      ...liveState,
+      match: { ...liveState.match!, match_id: 'fixture-1490480', home_team: 'San Diego', away_team: 'Philadelphia Union', competition: 'MLS', status: 'live', minute: 42, phase: 'first_half', version: 3, updated_at: '2026-09-14T01:42:01Z' },
+    }
+    render(<MatchStage live={projectedLive} fixtures={staleSnapshot} fixtureLoading={false} fixtureAvailable />)
+
+    expect(screen.getByText('LIVE', { selector: '.match-phase-label' })).toBeInTheDocument()
+    expect(screen.getByText('LIVE · 42′ · FIRST HALF')).toBeInTheDocument()
+    expect(screen.queryByText('KICKOFF DUE · AWAITING PROVIDER')).not.toBeInTheDocument()
+  })
+
+  it('shows delayed, postponed, and cancelled provider states without clock-inferred kickoff', () => {
+    const makeFixtures = (status: string, state: 'delayed' | 'postponed' | 'cancelled', phase: 'delayed' | 'postponed' | 'cancelled'): FootballFixtures => ({
+      provider_status: 'healthy', observed_at: '2026-09-14T01:45:00Z', upcoming: [], live: [],
+      today: [{ fixture_id: 44, subject_id: 'match-44', competition: 'MLS', home_team: 'San Diego', away_team: 'Philadelphia Union', kickoff_at: new Date(Date.now() - 20_000).toISOString(), status, state, phase, minute: 0, home_score: null, away_score: null }],
+    })
+    const { rerender } = render(<MatchStage live={liveState} fixtures={makeFixtures('Time To Be Defined', 'delayed', 'delayed')} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByText('TIME TBD', { selector: '.match-phase-label' })).toBeInTheDocument()
+    expect(screen.queryByText('UNTIL KICKOFF')).not.toBeInTheDocument()
+
+    rerender(<MatchStage live={liveState} fixtures={makeFixtures('Postponed', 'postponed', 'postponed')} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByText('POSTPONED', { selector: '.match-phase-label' })).toBeInTheDocument()
+    expect(screen.queryByText('UNTIL KICKOFF')).not.toBeInTheDocument()
+
+    rerender(<MatchStage live={liveState} fixtures={makeFixtures('Cancelled', 'cancelled', 'cancelled')} fixtureLoading={false} fixtureAvailable />)
+    expect(screen.getByText('CANCELLED', { selector: '.match-phase-label' })).toBeInTheDocument()
+    expect(screen.queryByText('UNTIL KICKOFF')).not.toBeInTheDocument()
   })
 
   it('keeps match awareness, observation metadata, and View Match in the hero footer', () => {
     const fixture: FootballFixtures = {
       provider_status: 'healthy', observed_at: '2026-09-13T01:00:00Z', today: [], live: [],
-      upcoming: [{ fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'scheduled', minute: 0, home_score: null, away_score: null }],
+      upcoming: [{ fixture_id: 1, subject_id: 'match-1', competition: 'Premier League', home_team: 'Northstar FC', away_team: 'Harbor United', kickoff_at: '2030-09-13T20:00:00Z', status: 'Not Started', state: 'scheduled', phase: 'pre_match', minute: 0, home_score: null, away_score: null }],
     }
     render(<MatchStage live={liveState} fixtures={fixture} fixtureLoading={false} fixtureAvailable />)
 

@@ -115,6 +115,8 @@ export type FootballFixture = {
   away_team: string
   kickoff_at: string
   status: string
+  state: 'scheduled' | 'delayed' | 'live' | 'halftime' | 'fulltime' | 'postponed' | 'cancelled' | 'suspended' | 'unknown'
+  phase: 'pre_match' | 'delayed' | 'first_half' | 'halftime' | 'second_half' | 'extra_time' | 'penalties' | 'fulltime' | 'postponed' | 'cancelled' | 'suspended' | 'unknown'
   minute: number
   home_score: number | null
   away_score: number | null

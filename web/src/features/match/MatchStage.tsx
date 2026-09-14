@@ -6,7 +6,7 @@ import type { FootballFixture, FootballFixtures, LiveState, Match, TimelineItem 
 import { getPreference, removePreference, setPreference } from '../../lib/platform'
 import { presentTimelineItem } from '../../lib/timelinePresentation'
 
-type MatchKind = 'live' | 'upcoming' | 'halftime' | 'fulltime' | 'idle'
+type MatchKind = 'live' | 'upcoming' | 'halftime' | 'fulltime' | 'delayed' | 'postponed' | 'cancelled' | 'suspended' | 'unknown' | 'idle'
 type MatchPick = { match: Match | null; kind: MatchKind; kickoff?: string; observed?: string | null }
 type DetailTab = 'updates' | 'schedule' | 'lineups' | 'stats'
 const SELECTED_MATCH_KEY = 'livepulse.selected-match.v1'
@@ -20,10 +20,6 @@ function allFixtures(fixtures: FootballFixtures | null) {
 }
 
 function asMatch(fixture: FootballFixture): Match {
-  const raw = fixture.status.toLowerCase()
-  const status = ['1h', '2h', 'et', 'p', 'live', 'in_play', 'first_half', 'second_half'].includes(raw) ? 'live'
-    : ['ht', 'halftime'].includes(raw) ? 'halftime'
-      : ['ft', 'aet', 'pen', 'fulltime'].includes(raw) ? 'fulltime' : 'scheduled'
   return {
     match_id: fixture.subject_id,
     home_team: fixture.home_team,
@@ -31,9 +27,9 @@ function asMatch(fixture: FootballFixture): Match {
     competition: fixture.competition,
     home_score: fixture.home_score ?? 0,
     away_score: fixture.away_score ?? 0,
-    status,
+    status: fixture.state,
     minute: fixture.minute,
-    phase: status === 'halftime' ? 'halftime' : status === 'live' ? 'second_half' : status,
+    phase: fixture.phase,
     version: 0,
     last_event_id: null,
     last_event_type: null,
@@ -41,30 +37,75 @@ function asMatch(fixture: FootballFixture): Match {
   }
 }
 
+function kindForStatus(status: string): MatchKind {
+  if (status === 'live') return 'live'
+  if (status === 'halftime') return 'halftime'
+  if (status === 'fulltime') return 'fulltime'
+  if (status === 'scheduled') return 'upcoming'
+  if (status === 'delayed') return 'delayed'
+  if (status === 'postponed' || status === 'cancelled' || status === 'suspended') return status
+  return 'unknown'
+}
+
+function matchProgress(match: Match): number | null {
+  if (match.status === 'scheduled') return 0
+  if (match.phase === 'first_half') return 1
+  if (match.status === 'halftime') return 2
+  if (match.phase === 'second_half') return 3
+  if (match.phase === 'extra_time') return 4
+  if (match.phase === 'penalties') return 5
+  if (match.status === 'fulltime') return 6
+  return null
+}
+
+function preferProjection(snapshot: Match, projected: Match | null, observedAt?: string | null): Match {
+  if (!projected || projected.match_id !== snapshot.match_id) return snapshot
+  // A late cached snapshot must never regress the durable match lifecycle.
+  // A provider snapshot can still lead projection when it advances the phase.
+  const snapshotProgress = matchProgress(snapshot)
+  const projectedProgress = matchProgress(projected)
+  if (snapshotProgress !== null && projectedProgress !== null) {
+    if (projectedProgress > snapshotProgress) return projected
+    if (snapshotProgress > projectedProgress) return snapshot
+    if (snapshot.minute < projected.minute) return projected
+  }
+  const observedTime = observedAt ? Date.parse(observedAt) : Number.NaN
+  return Date.parse(projected.updated_at) >= observedTime ? projected : snapshot
+}
+
 function chooseMatch(live: LiveState, fixtures: FootballFixtures | null, selectedId: string | null): MatchPick {
   const discovered = allFixtures(fixtures)
   if (selectedId) {
     const selected = discovered.find((fixture) => fixture.subject_id === selectedId)
     if (selected) {
-      const match = asMatch(selected)
-      const kind: MatchKind = match.status === 'live' ? 'live' : match.status === 'halftime' ? 'halftime' : match.status === 'fulltime' ? 'fulltime' : 'upcoming'
+      const match = preferProjection(asMatch(selected), live.match, fixtures?.observed_at)
+      const kind = kindForStatus(match.status)
       return { match, kind, kickoff: kind === 'upcoming' ? selected.kickoff_at : undefined, observed: fixtures?.observed_at }
     }
   }
-  if (live.match && ['live', 'halftime'].includes(live.match.status)) return { match: live.match, kind: live.match.status === 'halftime' ? 'halftime' : 'live' }
-  const liveFixture = discovered.find((fixture) => ['1h', '2h', 'et', 'p', 'live', 'in_play', 'first_half', 'second_half', 'ht', 'halftime'].includes(fixture.status.toLowerCase()))
+  if (live.match && ['live', 'halftime'].includes(live.match.status)) {
+    const fixture = discovered.find((item) => item.subject_id === live.match?.match_id)
+    const match = fixture ? preferProjection(asMatch(fixture), live.match, fixtures?.observed_at) : live.match
+    return { match, kind: kindForStatus(match.status), observed: fixtures?.observed_at }
+  }
+  const liveFixture = discovered.find((fixture) => ['live', 'halftime'].includes(fixture.state))
   if (liveFixture) {
-    const match = asMatch(liveFixture)
-    return { match, kind: match.status === 'halftime' ? 'halftime' : 'live', observed: fixtures?.observed_at }
+    const match = preferProjection(asMatch(liveFixture), live.match, fixtures?.observed_at)
+    return { match, kind: kindForStatus(match.status), observed: fixtures?.observed_at }
   }
   const currentTime = Date.now()
-  const upcoming = discovered.find((fixture) => Date.parse(fixture.kickoff_at) > currentTime && !['ft', 'aet', 'pen', 'fulltime'].includes(fixture.status.toLowerCase()))
+  const upcoming = discovered.find((fixture) => fixture.state === 'scheduled' && Date.parse(fixture.kickoff_at) > currentTime)
   if (upcoming) return { match: asMatch(upcoming), kind: 'upcoming', kickoff: upcoming.kickoff_at, observed: fixtures?.observed_at }
-  const kickoffDue = [...discovered].reverse().find((fixture) => Date.parse(fixture.kickoff_at) >= currentTime - 4 * 60 * 60_000 && ['ns', 'tbd', 'pst', 'scheduled'].includes(fixture.status.toLowerCase()))
+  const kickoffDue = [...discovered].reverse().find((fixture) => Date.parse(fixture.kickoff_at) >= currentTime - 4 * 60 * 60_000 && fixture.state === 'scheduled')
   if (kickoffDue) return { match: asMatch(kickoffDue), kind: 'upcoming', kickoff: kickoffDue.kickoff_at, observed: fixtures?.observed_at }
   if (live.match?.status === 'fulltime') return { match: live.match, kind: 'fulltime' }
-  const completed = [...discovered].reverse().find((fixture) => ['ft', 'aet', 'pen', 'fulltime'].includes(fixture.status.toLowerCase()))
-  if (completed) return { match: asMatch(completed), kind: 'fulltime', observed: fixtures?.observed_at }
+  const completed = [...discovered].reverse().find((fixture) => fixture.state === 'fulltime')
+  if (completed) return { match: preferProjection(asMatch(completed), live.match, fixtures?.observed_at), kind: 'fulltime', observed: fixtures?.observed_at }
+  const nonScheduled = [...discovered].reverse().find((fixture) => ['delayed', 'postponed', 'cancelled', 'suspended'].includes(fixture.state))
+  if (nonScheduled) {
+    const match = preferProjection(asMatch(nonScheduled), live.match, fixtures?.observed_at)
+    return { match, kind: kindForStatus(match.status), observed: fixtures?.observed_at }
+  }
   return { match: null, kind: 'idle' }
 }
 
@@ -81,8 +122,25 @@ function phaseName(pick: MatchPick) {
   if (pick.kind === 'upcoming') return 'UPCOMING'
   if (pick.kind === 'fulltime') return 'FULL TIME'
   if (pick.kind === 'halftime') return 'HALF TIME'
-  if (pick.kind === 'live') return `${Math.max(0, pick.match?.minute ?? 0)}′ · ${pick.match?.phase.replaceAll('_', ' ').toUpperCase() ?? 'LIVE'}`
+  if (pick.kind === 'live') {
+    const phase = pick.match?.phase.replaceAll('_', ' ').toUpperCase() ?? 'LIVE'
+    return pick.match?.phase === 'penalties' || pick.match?.phase === 'unknown'
+      ? `LIVE · ${phase}`
+      : `LIVE · ${Math.max(0, pick.match?.minute ?? 0)}′ · ${phase}`
+  }
+  if (pick.kind === 'postponed') return 'POSTPONED'
+  if (pick.kind === 'delayed') return 'TIME TBD'
+  if (pick.kind === 'cancelled') return 'CANCELLED'
+  if (pick.kind === 'suspended') return 'SUSPENDED'
+  if (pick.kind === 'unknown') return 'STATUS UNCONFIRMED'
   return 'FOOTBALL'
+}
+
+function statusBadge(pick: MatchPick) {
+  if (pick.kind === 'live') return 'LIVE'
+  if (pick.kind === 'halftime') return 'HT'
+  if (pick.kind === 'fulltime') return 'FINAL'
+  return phaseName(pick)
 }
 
 function crest(team: string) {
@@ -194,19 +252,19 @@ export function MatchStage({ live, fixtures, fixtureLoading, fixtureAvailable, t
     {detailOpen && createPortal(<MatchDetails title="Football match center" tab={detailTab} setTab={setDetailTab} fixtures={candidates} selectedId={selectedId} selectMatch={(id) => { setSelectedId(id); closeDetails() }} updates={updates} onClose={closeDetails} />, document.body)}
   </section>
 
-  const scoreVisible = picked.kind !== 'upcoming'
+  const scoreVisible = picked.kind !== 'upcoming' && picked.kind !== 'unknown'
   return <motion.section className={`match-stage match-stage-${mode}${event ? ` event-${isGoal ? 'goal' : 'red-card'}` : ''}`} aria-label={`${phaseName(picked)}: ${match.home_team} versus ${match.away_team}`} layout transition={{ duration: reduceMotion ? 0 : .65, ease: [.2, .8, .2, 1] }}>
     <div className="match-art" aria-hidden="true" /><div className="match-shade" aria-hidden="true" /><div className="match-stage-grid" aria-hidden="true" />
     <header className="match-stage-top">
       <div className="match-competition"><span className={`match-state-dot${picked.kind === 'live' || picked.kind === 'halftime' ? ' is-live' : ''}`} /><div><span className="surface-overline">{match.competition || 'FOOTBALL'}</span><h2>{picked.kind === 'upcoming' ? 'Match approaching' : picked.kind === 'fulltime' ? 'Final result' : 'Match center'}</h2></div></div>
-      <div className={`match-phase-label${picked.kind === 'live' ? ' phase-live' : ''}`}><i />{phaseName(picked)}</div>
+      <div className={`match-phase-label${picked.kind === 'live' ? ' phase-live' : ''}`}><i />{statusBadge(picked)}</div>
       {sourceState !== 'healthy' && <span className={`match-provider-warning provider-${sourceState}`} role="status">{sourceStateText[sourceState]}</span>}
       <div className="match-controls"><button type="button" aria-label="Previous match" disabled={candidates.length < 2} onClick={() => moveMatch(-1)}><ChevronLeft size={16}/></button><button type="button" aria-label="Next match" disabled={candidates.length < 2} onClick={() => moveMatch(1)}><ChevronRight size={16}/></button><button type="button" className="match-auto" onClick={() => { setSelectedId(null); setPinned(false) }}>AUTO</button><button type="button" className={pinned ? 'is-pinned' : ''} aria-pressed={pinned} aria-label={pinned ? 'Unpin this match' : 'Pin this match'} onClick={() => { setPinned((value) => !value); if (!selectedId) setSelectedId(match.match_id) }}><Pin size={14}/></button></div>
     </header>
     <div className="match-summary"><span>{picked.kind === 'upcoming' ? `KICKOFF · ${new Date(picked.kickoff!).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : picked.kind === 'live' ? 'LIVE MATCH' : picked.kind === 'halftime' ? 'INTERVAL' : 'PROVIDER OBSERVED'}</span><span>{candidates.length ? `MATCH ${selectedIndex >= 0 ? selectedIndex + 1 : 1} / ${candidates.length}` : 'SINGLE MATCH'}</span></div>
     <div className="fixture-composition">
       <div className="fixture-team fixture-home"><span className="team-monogram">{crest(match.home_team)}</span><span className="fixture-team-copy"><small>HOME</small><strong>{match.home_team}</strong></span></div>
-      <div className="fixture-center">{scoreVisible ? <div className="fixture-score" aria-label={`${match.home_score} to ${match.away_score}`}><AnimatePresence mode="popLayout" initial={false}><motion.span key={`h-${match.home_score}`} initial={reduceMotion ? false : { y: 16, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={reduceMotion ? undefined : { y: -12, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .34 }}>{match.home_score}</motion.span></AnimatePresence><i>:</i><AnimatePresence mode="popLayout" initial={false}><motion.span key={`a-${match.away_score}`} initial={reduceMotion ? false : { y: 16, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={reduceMotion ? undefined : { y: -12, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .34 }}>{match.away_score}</motion.span></AnimatePresence></div> : <div className={`countdown-dial ${urgency}`}><span>{durationLabel(remaining)}</span><small>UNTIL KICKOFF</small></div>}<span className={`fixture-phase${picked.kind === 'live' ? ' is-live' : ''}`}>{picked.kind === 'upcoming' ? remaining <= 0 ? 'KICKOFF DUE · AWAITING PROVIDER' : 'KICKOFF WINDOW' : phaseName(picked)}</span></div>
+      <div className="fixture-center">{scoreVisible ? <div className="fixture-score" aria-label={`${match.home_score} to ${match.away_score}`}><AnimatePresence mode="popLayout" initial={false}><motion.span key={`h-${match.home_score}`} initial={reduceMotion ? false : { y: 16, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={reduceMotion ? undefined : { y: -12, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .34 }}>{match.home_score}</motion.span></AnimatePresence><i>:</i><AnimatePresence mode="popLayout" initial={false}><motion.span key={`a-${match.away_score}`} initial={reduceMotion ? false : { y: 16, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={reduceMotion ? undefined : { y: -12, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : .34 }}>{match.away_score}</motion.span></AnimatePresence></div> : picked.kind === 'upcoming' ? <div className={`countdown-dial ${urgency}`}><span>{durationLabel(remaining)}</span><small>UNTIL KICKOFF</small></div> : <div className="fixture-score fixture-status-score">—</div>}<span className={`fixture-phase${picked.kind === 'live' ? ' is-live' : ''}`}>{picked.kind === 'upcoming' ? remaining <= 0 ? 'KICKOFF DUE · AWAITING PROVIDER' : 'KICKOFF WINDOW' : phaseName(picked)}</span></div>
       <div className="fixture-team fixture-away"><span className="team-monogram">{crest(match.away_team)}</span><span className="fixture-team-copy"><small>AWAY</small><strong>{match.away_team}</strong></span></div>
     </div>
     <svg className={`match-pulse-field${picked.kind === 'live' ? ' pulse-live' : ''}${pinned ? ' pulse-pinned' : ''}`} viewBox="0 0 540 100" aria-hidden="true"><path d="M4 56 C72 22 123 78 189 49 S300 23 365 52 462 76 536 38"/><path d="M4 66 C75 34 125 88 191 60 S300 36 365 62 462 86 536 48"/><path d="M4 46 C73 12 121 68 188 40 S300 14 364 42 463 66 536 28"/><path className="pulse-field-core" d="M6 56 C75 32 125 75 190 50 S301 26 365 53 463 73 534 38"/><circle cx="365" cy="52" r="3"/></svg>

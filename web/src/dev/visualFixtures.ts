@@ -38,7 +38,7 @@ const emptyLive: LiveState = {
 }
 const baseFixture = {
   fixture_id: 1001, subject_id: 'fixture-1001', competition: 'Premier League', home_team: 'Manchester City', away_team: 'Arsenal',
-  kickoff_at: new Date(Date.now() + 42 * 60_000).toISOString(), status: 'scheduled', minute: 0, home_score: null, away_score: null,
+  kickoff_at: new Date(Date.now() + 42 * 60_000).toISOString(), status: 'Not Started', state: 'scheduled' as const, phase: 'pre_match' as const, minute: 0, home_score: null, away_score: null,
 }
 const liveMatch: LiveState['match'] = {
   match_id: 'fixture-1001', home_team: 'Manchester City', away_team: 'Arsenal', competition: 'Premier League', home_score: 2, away_score: 1,
@@ -51,7 +51,7 @@ const liveState: LiveState = {
 const football = (status: 'healthy' | 'degraded', kind: 'empty' | 'upcoming' | 'live' = 'empty'): FootballFixtures => ({
   provider_status: status, observed_at: now(),
   today: kind === 'live' ? [baseFixture] : [], upcoming: kind === 'upcoming' ? [baseFixture] : [],
-  live: kind === 'live' ? [{ ...baseFixture, status: '2H', minute: 67, home_score: 2, away_score: 1 }] : [],
+  live: kind === 'live' ? [{ ...baseFixture, status: 'Second Half', state: 'live', phase: 'second_half', minute: 67, home_score: 2, away_score: 1 }] : [],
 })
 const spotifyIdle: SpotifyPlaybackView = { provider: 'spotify', playback: null, observed_at: now(), freshness_seconds: 3 }
 const spotifyPlaying: SpotifyPlaybackView = {

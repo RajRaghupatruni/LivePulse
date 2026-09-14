@@ -183,3 +183,58 @@ describe('inactive-match realtime notifications', () => {
     unmount()
   })
 })
+
+describe('live football projection updates', () => {
+  const originalWebSocket = globalThis.WebSocket
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+    const scheduled = state(1, 'api-football:fixture:1490480')
+    scheduled.match!.status = 'scheduled'
+    scheduled.match!.minute = 0
+    scheduled.match!.phase = 'pre_match'
+    vi.mocked(getLiveState).mockResolvedValue(scheduled)
+    vi.mocked(getTimeline).mockResolvedValue({ items: [], latest_cursor: 0 })
+  })
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket
+  })
+
+  it('applies a provider projection pushed over WebSocket and keeps its newer state', async () => {
+    const { result, unmount } = renderHook(() => useLivePulse())
+    await waitFor(() => expect(FakeWebSocket.instance).toBeDefined())
+    act(() => FakeWebSocket.instance.open())
+    await waitFor(() => expect(result.current.live.match?.status).toBe('scheduled'))
+
+    const live = state(2, 'api-football:fixture:1490480', '2026-09-14T01:42:01Z')
+    live.match!.home_team = 'San Diego'
+    live.match!.away_team = 'Philadelphia Union'
+    live.match!.competition = 'MLS'
+    live.match!.status = 'live'
+    live.match!.minute = 42
+    live.match!.phase = 'first_half'
+    vi.mocked(getLiveState).mockResolvedValue(live)
+    act(() => FakeWebSocket.instance.send({
+      type: 'timeline.item',
+      cursor: 1,
+      event_id: 'provider-kickoff-1490480',
+      event_type: 'football.match.yellow_card',
+      source: 'api-football',
+      subject_id: live.match!.match_id,
+      timestamp: live.match!.updated_at,
+      state: live.match,
+      focus: live.focus,
+      payload: {},
+    }))
+
+    await waitFor(() => {
+      expect(result.current.live.match?.status).toBe('live')
+      expect(result.current.live.match?.phase).toBe('first_half')
+      expect(result.current.live.match?.minute).toBe(42)
+    })
+    expect(result.current.timeline.map((item) => item.event_id)).toEqual(['provider-kickoff-1490480'])
+    unmount()
+  })
+})

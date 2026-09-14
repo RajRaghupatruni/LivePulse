@@ -48,6 +48,16 @@ def test_late_goal_does_not_change_final_match_state() -> None:
     assert late_goal == state
 
 
+def test_live_card_fact_resolves_phase_instead_of_leaving_a_prematch_projection() -> None:
+    scheduled = reduce_match_state(None, event("football.match.scheduled", 1))
+    card = reduce_match_state(
+        scheduled,
+        event("football.match.yellow_card", 2, minute=42, side="away"),
+    )
+
+    assert (card["status"], card["phase"], card["minute"]) == ("live", "first_half", 42)
+
+
 def test_focus_engine_uses_deterministic_event_priority() -> None:
     now = datetime.now(UTC)
     goal = focus_for_match("live", "football.match.goal", now, now, subject_id="match-1")

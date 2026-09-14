@@ -26,7 +26,10 @@ def reduce_match_state(current: dict[str, Any] | None, event: CanonicalEvent) ->
         "home_score": current["home_score"] if current else 0,
         "away_score": current["away_score"] if current else 0,
         "status": current["status"] if current else "scheduled",
-        "minute": max(current["minute"] if current else 0, int(payload.get("minute", 0))),
+        "minute": max(
+            current["minute"] if current else 0,
+            int(payload.get("current_minute", payload.get("minute", 0))),
+        ),
         "phase": current["phase"] if current else "pre_match",
         "version": event.version,
         "last_event_id": event.event_id,
@@ -45,23 +48,42 @@ def reduce_match_state(current: dict[str, Any] | None, event: CanonicalEvent) ->
         else:
             raise ValueError("goal event requires side=home or side=away")
         if state["status"] not in {"fulltime", "halftime"}:
-            state.update(
-                status="live", phase="second_half" if state["minute"] >= 45 else "first_half"
-            )
+            phase = state["phase"]
+            if phase in {"pre_match", "scheduled", "unknown"}:
+                phase = "second_half" if state["minute"] >= 45 else "first_half"
+            elif phase == "first_half" and state["minute"] >= 45:
+                phase = "second_half"
+            state.update(status="live", phase=phase)
     elif event.event_type.endswith(".score_corrected"):
         state.update(home_score=int(payload["home_score"]), away_score=int(payload["away_score"]))
     elif event.event_type.endswith(".yellow_card") or event.event_type.endswith(".red_card"):
         if state["status"] not in {"fulltime", "halftime"}:
-            state["status"] = "live"
+            state.update(
+                status="live",
+                phase=("second_half" if state["minute"] >= 45 else "first_half")
+                if state["phase"] in {"pre_match", "scheduled", "unknown"}
+                else state["phase"],
+            )
     elif event.event_type.endswith(".substitution"):
         if state["status"] not in {"fulltime", "halftime"}:
-            state["status"] = "live"
+            state.update(
+                status="live",
+                phase=("second_half" if state["minute"] >= 45 else "first_half")
+                if state["phase"] in {"pre_match", "scheduled", "unknown"}
+                else state["phase"],
+            )
     elif event.event_type.endswith(".halftime"):
         if state["status"] != "fulltime":
-            state.update(status="halftime", phase="halftime", minute=45)
+            state.update(status="halftime", phase="halftime")
     elif event.event_type.endswith(".second_half"):
         if state["status"] != "fulltime":
-            state.update(status="live", phase="second_half", minute=45)
+            state.update(status="live", phase="second_half")
+    elif event.event_type.endswith(".extra_time"):
+        if state["status"] != "fulltime":
+            state.update(status="live", phase="extra_time", minute=max(90, state["minute"]))
+    elif event.event_type.endswith(".penalties"):
+        if state["status"] != "fulltime":
+            state.update(status="live", phase="penalties", minute=max(120, state["minute"]))
     elif event.event_type.endswith(".fulltime"):
-        state.update(status="fulltime", phase="fulltime", minute=90)
+        state.update(status="fulltime", phase="fulltime")
     return state

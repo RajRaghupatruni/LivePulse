@@ -30,6 +30,7 @@ from app.providers.football.models import (
     NormalizedMatchEvent,
 )
 from app.providers.football.normalize import normalize_fixture
+from app.providers.football.service import FootballFixtureService
 from app.providers.football.source import FootballPollSource
 from app.providers.football.store import FootballCheckpointStore
 from app.providers.observations import Observation
@@ -423,6 +424,122 @@ def test_baseline_fixture_suppresses_only_scheduled_discovery() -> None:
         correlation_id=uuid7(),
     )
     assert repeated == []
+
+
+def test_fixture_contract_normalizes_provider_phases_without_exposing_codes() -> None:
+    cases = [
+        ("NS", "Not Started", "scheduled", "pre_match"),
+        ("TBD", "Time To Be Defined", "delayed", "delayed"),
+        ("1H", "First Half", "live", "first_half"),
+        ("HT", "Halftime", "halftime", "halftime"),
+        ("2H", "Second Half", "live", "second_half"),
+        ("ET", "Extra Time", "live", "extra_time"),
+        ("P", "Penalty In Progress", "live", "penalties"),
+        ("FT", "Match Finished", "fulltime", "fulltime"),
+        ("PST", "Postponed", "postponed", "postponed"),
+        ("CANC", "Cancelled", "cancelled", "cancelled"),
+        ("SUSP", "Match Suspended", "suspended", "suspended"),
+    ]
+    for code, label, expected_state, expected_phase in cases:
+        summary = FootballFixtureService._summaries(
+            [make_match(status=code).model_copy(update={"status_label": label})]
+        )[0]
+        assert (summary.status, summary.state, summary.phase) == (
+            label,
+            expected_state,
+            expected_phase,
+        )
+
+
+def test_live_status_lifecycle_emits_projectable_transitions_after_schedule_baseline() -> None:
+    correlation_id = uuid7()
+    current = make_match(status="NS", minute=0)
+    no_discovery_event, checkpoint = diff_fixture(
+        None, observation(current), correlation_id=correlation_id, emit_scheduled=False
+    )
+    assert no_discovery_event == []
+
+    state = None
+    observations = [
+        make_match(status="1H", minute=42, home_score=0, away_score=0),
+        make_match(status="HT", minute=45, home_score=0, away_score=0),
+        make_match(status="2H", minute=61, home_score=1, away_score=0),
+        make_match(status="ET", minute=95, home_score=1, away_score=1),
+        make_match(status="P", minute=120, home_score=1, away_score=1),
+        make_match(status="FT", minute=120, home_score=1, away_score=1),
+    ]
+    from app.projections.reducer import reduce_match_state
+
+    # Reuse the durable baseline checkpoint across provider restart boundaries.
+    checkpoint = {**checkpoint, "status_code": "NS", "scheduled_emitted": False}
+    for index, content in enumerate(observations, start=1):
+        emitted, checkpoint = diff_fixture(
+            checkpoint,
+            observation(content, observed_at=NOW + timedelta(minutes=index)),
+            correlation_id=correlation_id,
+            emit_scheduled=False,
+        )
+        assert emitted, f"provider transition {content.status_code} was suppressed"
+        for item in emitted:
+            state = reduce_match_state(state, item)
+        if content.status_code == "1H":
+            assert state is not None and (state["status"], state["phase"], state["minute"]) == (
+                "live",
+                "first_half",
+                42,
+            )
+        elif content.status_code == "HT":
+            assert state is not None and (state["status"], state["phase"]) == (
+                "halftime",
+                "halftime",
+            )
+        elif content.status_code == "2H":
+            assert state is not None and (state["status"], state["phase"], state["home_score"]) == (
+                "live",
+                "second_half",
+                1,
+            )
+            assert state["minute"] == 61
+        elif content.status_code == "ET":
+            assert state is not None and (state["status"], state["phase"]) == ("live", "extra_time")
+        elif content.status_code == "P":
+            assert state is not None and (state["status"], state["phase"]) == ("live", "penalties")
+        else:
+            assert state is not None and (state["status"], state["phase"]) == (
+                "fulltime",
+                "fulltime",
+            )
+            assert state["minute"] == 120
+
+
+def test_card_event_does_not_leave_a_new_projection_in_pre_match_phase() -> None:
+    from app.projections.reducer import reduce_match_state
+
+    match = make_match(status="NS")
+    kickoff = diff_fixture(None, observation(match), correlation_id=uuid7())[0]
+    # A projector can first learn a match through a meaningful live fact when
+    # the schedule event was intentionally baseline-suppressed.
+    card = diff_fixture(
+        {"status_code": "NS", "version": 0, "scheduled_kickoff": match.kickoff_at.isoformat()},
+        observation(
+            make_match(
+                status="1H",
+                minute=42,
+                events=(event("first-card", "Card", 42, side="away", detail="Yellow Card"),),
+            )
+        ),
+        correlation_id=uuid7(),
+        emit_scheduled=False,
+    )[0]
+    assert any(item.event_type == FootballEventType.KICKOFF.value for item in card)
+    assert any(item.event_type == FootballEventType.YELLOW_CARD.value for item in card)
+
+    state = None
+    for item in card:
+        state = reduce_match_state(state, item)
+    assert state is not None
+    assert (state["status"], state["phase"], state["minute"]) == ("live", "first_half", 42)
+    assert kickoff  # normal scheduled discovery remains independently supported
 
 
 def test_goal_card_and_substitution_map_to_canonical_families() -> None:

@@ -81,6 +81,7 @@ def diff_fixture(
         detail: str | None = None,
         home_score: int | None = None,
         away_score: int | None = None,
+        phase: str | None = None,
     ) -> None:
         nonlocal version, current_home, current_away
         version += 1
@@ -96,10 +97,12 @@ def diff_fixture(
             away_team=fixture.away_team,
             competition=fixture.competition,
             minute=min(130, max(0, event_minute)),
+            current_minute=min(130, max(0, fixture.minute)),
             side=side,
             player=player,
             substitute=substitute,
             detail=detail,
+            phase=phase,
             home_score=max(0, resolved_home),
             away_score=max(0, resolved_away),
             status=fixture.status_label or status_code,
@@ -122,6 +125,8 @@ def diff_fixture(
 
     halftime_emitted = bool(prior.get("halftime_emitted"))
     second_half_emitted = bool(prior.get("second_half_emitted"))
+    extra_time_emitted = bool(prior.get("extra_time_emitted"))
+    penalties_emitted = bool(prior.get("penalties_emitted"))
 
     def ensure_halftime() -> None:
         nonlocal halftime_emitted
@@ -145,6 +150,32 @@ def diff_fixture(
                 occurred_at=actual_kickoff_at + timedelta(minutes=60),
             )
             second_half_emitted = True
+
+    def ensure_extra_time() -> None:
+        nonlocal extra_time_emitted
+        if status_code in {"ET", "BT", "P", "AET", "PEN"} and not extra_time_emitted:
+            ensure_second_half()
+            emit(
+                FootballEventType.EXTRA_TIME,
+                identity="extra-time",
+                event_minute=90,
+                occurred_at=actual_kickoff_at + timedelta(minutes=90),
+                phase="extra_time",
+            )
+            extra_time_emitted = True
+
+    def ensure_penalties() -> None:
+        nonlocal penalties_emitted
+        if status_code in {"P", "PEN"} and not penalties_emitted:
+            ensure_extra_time()
+            emit(
+                FootballEventType.PENALTIES,
+                identity="penalties",
+                event_minute=120,
+                occurred_at=actual_kickoff_at + timedelta(minutes=120),
+                phase="penalties",
+            )
+            penalties_emitted = True
 
     kickoff_at = fixture.kickoff_at
     actual_kickoff_at = fixture.actual_kickoff_at or kickoff_at
@@ -173,6 +204,10 @@ def diff_fixture(
             ensure_halftime()
         if event.minute > 45:
             ensure_second_half()
+        if event.minute >= 90:
+            ensure_extra_time()
+        if event.minute >= 120:
+            ensure_penalties()
         classified = _classify_event(event)
         if classified is None or event.identity in event_ids:
             continue
@@ -203,6 +238,8 @@ def diff_fixture(
 
     ensure_halftime()
     ensure_second_half()
+    ensure_extra_time()
+    ensure_penalties()
 
     reported_home = fixture.home_score if fixture.home_score is not None else old_home
     reported_away = fixture.away_score if fixture.away_score is not None else old_away
@@ -277,6 +314,8 @@ def diff_fixture(
         "kickoff_emitted": bool(prior.get("kickoff_emitted") or is_live_or_later),
         "halftime_emitted": halftime_emitted,
         "second_half_emitted": second_half_emitted,
+        "extra_time_emitted": extra_time_emitted,
+        "penalties_emitted": penalties_emitted,
         "fulltime_emitted": bool(prior.get("fulltime_emitted") or status_code in FULLTIME_CODES),
         "final_verification_pending": final_verification_pending,
         "terminal": status_code in FULLTIME_CODES | CANCELLED_CODES,

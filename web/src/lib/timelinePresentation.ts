@@ -46,6 +46,8 @@ export function presentTimelineItem(item: TimelineItem): TimelinePresentation {
       'football.match.substitution': ['Substitution', [player, text(payload.substitute), team].filter(Boolean).join(' · ') || 'Squad change', 'normal'],
       'football.match.halftime': ['Half-time', text(payload.competition, 'The first half has ended'), 'normal'],
       'football.match.second_half': ['Second half', text(payload.competition, 'Play has resumed'), 'normal'],
+      'football.match.extra_time': ['Extra time', text(payload.competition, 'Extra time has started'), 'normal'],
+      'football.match.penalties': ['Penalty shoot-out', text(payload.competition, 'Penalties are underway'), 'normal'],
       'football.match.fulltime': ['Full-time', text(payload.competition, 'Final result confirmed'), 'normal'],
     }
     const [title, summary, severity] = labels[type] ?? ['Football update', text(payload.competition, 'Match activity'), 'normal']

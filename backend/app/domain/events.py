@@ -17,6 +17,8 @@ class FootballEventType(StrEnum):
     SUBSTITUTION = "football.match.substitution"
     HALFTIME = "football.match.halftime"
     SECOND_HALF = "football.match.second_half"
+    EXTRA_TIME = "football.match.extra_time"
+    PENALTIES = "football.match.penalties"
     FULLTIME = "football.match.fulltime"
 
 
@@ -27,6 +29,7 @@ class FootballPayload(BaseModel):
     away_team: str
     competition: str = "Premier League"
     minute: int = Field(default=0, ge=0, le=130)
+    current_minute: int | None = Field(default=None, ge=0, le=130)
     side: Literal["home", "away"] | None = None
     player: str | None = None
     substitute: str | None = None

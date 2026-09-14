@@ -86,3 +86,54 @@ async def test_ahead_cursor_requests_authoritative_resync(monkeypatch: pytest.Mo
     assert websocket.messages == [
         {"type": "resync_required", "reason": "cursor_ahead", "latest_cursor": 4}
     ]
+
+
+@pytest.mark.asyncio
+async def test_live_state_recovers_newest_live_projection_without_demo_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    updated_at = datetime.now(UTC)
+    match = SimpleNamespace(
+        match_id="api-football:fixture:1490480",
+        home_team="San Diego",
+        away_team="Philadelphia Union",
+        competition="MLS",
+        home_score=0,
+        away_score=0,
+        status="live",
+        minute=42,
+        phase="first_half",
+        version=2,
+        last_event_id=uuid4(),
+        last_event_type="football.match.yellow_card",
+        updated_at=updated_at,
+    )
+
+    class ProjectionSession:
+        async def get(self, _model: object, _key: object) -> None:
+            return None
+
+        async def scalar(self, _query: object) -> object:
+            return match
+
+    async def no_dominant_focus(*_args: object) -> None:
+        return None
+
+    monkeypatch.setattr(routes, "_dominant_focus", no_dominant_focus)
+    snapshot = await routes.live_state(ProjectionSession())  # type: ignore[arg-type]
+
+    assert snapshot["match"] == {
+        "match_id": "api-football:fixture:1490480",
+        "home_team": "San Diego",
+        "away_team": "Philadelphia Union",
+        "competition": "MLS",
+        "home_score": 0,
+        "away_score": 0,
+        "status": "live",
+        "minute": 42,
+        "phase": "first_half",
+        "version": 2,
+        "last_event_id": str(match.last_event_id),
+        "last_event_type": "football.match.yellow_card",
+        "updated_at": updated_at.isoformat(),
+    }

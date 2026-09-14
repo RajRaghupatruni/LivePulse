@@ -1,7 +1,7 @@
 """Typed API-Football DTOs and vendor-neutral football observations."""
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -207,6 +207,31 @@ class FixtureSummary(BaseModel):
     away_team: str
     kickoff_at: datetime
     status: str
+    state: Literal[
+        "scheduled",
+        "delayed",
+        "live",
+        "halftime",
+        "fulltime",
+        "postponed",
+        "cancelled",
+        "suspended",
+        "unknown",
+    ]
+    phase: Literal[
+        "pre_match",
+        "first_half",
+        "halftime",
+        "second_half",
+        "extra_time",
+        "penalties",
+        "fulltime",
+        "delayed",
+        "postponed",
+        "cancelled",
+        "suspended",
+        "unknown",
+    ]
     minute: int
     home_score: int | None
     away_score: int | None

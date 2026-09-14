@@ -683,6 +683,17 @@ async def live_state(session: AsyncSession = Depends(get_session)) -> dict[str, 
         else None
     )
     if match is None:
+        # The demo selector keeps the M1 scenario focused when it is active.
+        # Outside the demo, recover the newest durable live projection so real
+        # provider observations are available to REST snapshots and WebSocket
+        # resynchronization after a page reload or reconnect.
+        match = await session.scalar(
+            select(MatchStateRow)
+            .where(MatchStateRow.status.in_(("live", "halftime")))
+            .order_by(MatchStateRow.updated_at.desc())
+            .limit(1)
+        )
+    if match is None:
         focus = focus_for_match("idle", None)
         dominant = await _dominant_focus(session, None, focus)
         return {

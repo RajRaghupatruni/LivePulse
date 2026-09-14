@@ -9,6 +9,8 @@ from pydantic import SecretStr
 from app.api import routes
 from app.core.config import Settings
 from app.core.health import _components, component_snapshot, overall_status, report_component
+from app.providers.gmail import router as gmail_router
+from app.providers.spotify.router import spotify_provider
 from app.providers.status import ProviderHealthRegistry
 
 
@@ -17,6 +19,12 @@ def test_application_boots_with_no_provider_credentials(
 ) -> None:
     settings = Settings(_env_file=None, run_background_services=False)
     monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    # The production router owns a provider instance created at import time;
+    # patch its actual config boundary so this remains a no-credentials test
+    # even when a developer .env configures Spotify.
+    monkeypatch.setattr(spotify_provider, "settings_getter", lambda: settings)
+    monkeypatch.setattr(spotify_provider.oauth, "_settings_getter", lambda: settings)
+    monkeypatch.setattr(gmail_router, "get_settings", lambda: settings)
 
     class FakeEngine:
         async def dispose(self) -> None:
@@ -30,7 +38,9 @@ def test_application_boots_with_no_provider_credentials(
         assert registry.command_target("spotify") is not None
         assert client.get("/api/v1/football/fixtures").status_code == 200
         assert client.post("/api/v1/webhooks/github", content=b"{}").status_code == 401
-        assert client.get("/api/v1/providers/spotify/oauth/start").status_code == 503
+        spotify_start = client.get("/api/v1/providers/spotify/oauth/start")
+        assert spotify_start.status_code == 503
+        assert spotify_start.json()["error"]["code"] == "configuration_missing"
         assert client.get("/api/v1/providers/gmail/oauth/start").status_code == 503
         assert client.get("/api/v1/providers/weather/current").status_code == 200
 

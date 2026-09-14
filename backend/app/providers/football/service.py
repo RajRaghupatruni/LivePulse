@@ -74,12 +74,60 @@ class FootballFixtureService:
                 away_team=item.away_team,
                 kickoff_at=item.kickoff_at,
                 status=item.status_label or item.status_code,
+                state=_normalized_match_state(item.status_code),
+                phase=_normalized_match_phase(item.status_code),
                 minute=item.minute,
                 home_score=item.home_score,
                 away_score=item.away_score,
             )
             for item in sorted(fixtures, key=lambda row: (row.kickoff_at, row.fixture_id))
         ]
+
+
+def _normalized_match_state(status_code: str) -> str:
+    code = status_code.upper()
+    if code == "NS":
+        return "scheduled"
+    if code == "TBD":
+        return "delayed"
+    if code in {"1H", "2H", "ET", "BT", "P", "LIVE"}:
+        return "live"
+    if code == "HT":
+        return "halftime"
+    if code in {"FT", "AET", "PEN"}:
+        return "fulltime"
+    if code == "PST":
+        return "postponed"
+    if code in {"CANC", "ABD", "AWD", "WO"}:
+        return "cancelled"
+    if code in {"SUSP", "INT"}:
+        return "suspended"
+    return "unknown"
+
+
+def _normalized_match_phase(status_code: str) -> str:
+    code = status_code.upper()
+    return {
+        "NS": "pre_match",
+        "TBD": "delayed",
+        "1H": "first_half",
+        "HT": "halftime",
+        "2H": "second_half",
+        "ET": "extra_time",
+        "BT": "extra_time",
+        "P": "penalties",
+        "LIVE": "unknown",
+        "FT": "fulltime",
+        "AET": "fulltime",
+        "PEN": "fulltime",
+        "PST": "postponed",
+        "CANC": "cancelled",
+        "ABD": "cancelled",
+        "AWD": "cancelled",
+        "WO": "cancelled",
+        "SUSP": "suspended",
+        "INT": "suspended",
+    }.get(code, "unknown")
 
 
 class FootballApiResponse(BaseModel):

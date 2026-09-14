@@ -64,7 +64,7 @@ The normalized provider-observation contract is an adapter boundary before canon
 
 Names below are reserved contracts, not claims that corresponding events or providers exist. Event history stays immutable; corrections use a new event.
 
-- Football: `football.match.scheduled`, `football.match.kickoff`, `football.match.goal`, `football.match.score_corrected`, `football.match.yellow_card`, `football.match.red_card`, `football.match.substitution`, `football.match.halftime`, `football.match.second_half`, `football.match.fulltime`.
+- Football: `football.match.scheduled`, `football.match.kickoff`, `football.match.goal`, `football.match.score_corrected`, `football.match.yellow_card`, `football.match.red_card`, `football.match.substitution`, `football.match.halftime`, `football.match.second_half`, `football.match.extra_time`, `football.match.penalties`, `football.match.fulltime`.
 - Spotify: `spotify.playback.started`, `spotify.playback.paused`, `spotify.playback.resumed`, `spotify.track.changed`, `spotify.device.changed`, `spotify.context.changed`.
 - GitHub: `developer.workflow.started`, `developer.workflow.completed`, `developer.workflow.failed`, `developer.pull_request.opened`, `developer.pull_request.merged`, `developer.push.received`, `developer.deployment.completed`, `developer.deployment.failed`.
 - Gmail: `mail.message.received`, `mail.thread.updated`.

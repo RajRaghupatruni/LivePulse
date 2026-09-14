@@ -9,7 +9,7 @@ WebSocket delivery can be interrupted, duplicated, or outlive the state snapshot
 
 ## Decision
 
-REST live-state and timeline endpoints reconstruct the authoritative browser view. WebSocket messages are incremental notifications carrying durable timeline cursors and state/event identity. The frontend rejects stale versions within one match. A notification for a different match is kept as timeline history but triggers an authoritative REST refresh because the projector can emit inactive-match history and only REST identifies the active match. Timeline items are deduplicated by event identity, and connection UX distinguishes reconnecting from resynchronizing.
+REST live-state and timeline endpoints reconstruct the authoritative browser view. With no active demo match, live-state selects the newest durable live/halftime match projection so real provider state survives refresh and reconnect. WebSocket messages are incremental notifications carrying durable timeline cursors and state/event identity. The frontend rejects stale versions within one match. A notification for a different match is kept as timeline history but triggers an authoritative REST refresh because the projector can emit inactive-match history and only REST identifies the active match. Timeline items are deduplicated by event identity, and connection UX distinguishes reconnecting from resynchronizing.
 
 ## Consequences
 
