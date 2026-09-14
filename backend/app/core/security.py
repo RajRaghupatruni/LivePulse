@@ -28,7 +28,10 @@ class TrustedBoundaryMiddleware:
         origin_value = headers.get(b"origin")
         origin = origin_value.decode("latin-1") if origin_value else None
 
-        if not self._trusted_host(host, settings):
+        trusted_host = self._trusted_host(host, settings) or self._trusted_github_webhook_ingress(
+            host, scope, settings
+        )
+        if not trusted_host:
             log.warning(
                 "trusted boundary rejected request",
                 extra={
@@ -74,6 +77,30 @@ class TrustedBoundaryMiddleware:
             return hostname in {"localhost", "127.0.0.1", "::1"}
         allowed = {_parse_host(value) for value in settings.public_demo_allowed_hosts}
         return hostname in allowed
+
+    @staticmethod
+    def _trusted_github_webhook_ingress(
+        host_header: str, scope: dict[str, Any], settings: Settings
+    ) -> bool:
+        if (
+            settings.runtime_mode is not RuntimeMode.PERSONAL_LOCAL
+            or scope.get("type") != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") != "/api/v1/webhooks/github"
+        ):
+            return False
+        if any(ord(character) <= 32 or ord(character) == 127 for character in host_header):
+            return False
+        if host_header.endswith(":"):
+            return False
+        try:
+            raw_hostname = urlsplit("//" + host_header).hostname
+        except ValueError:
+            return False
+        if raw_hostname is None or raw_hostname.endswith(".."):
+            return False
+        hostname = _parse_host(host_header)
+        return hostname is not None and hostname in settings.github_webhook_allowed_hosts
 
     @staticmethod
     def _trusted_origin(origin: str, settings: Settings) -> bool:

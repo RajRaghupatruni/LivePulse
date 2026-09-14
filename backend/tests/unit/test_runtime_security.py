@@ -47,6 +47,100 @@ def test_personal_local_rejects_unsupported_hosts_and_origins(
     )
 
 
+def test_github_webhook_tunnel_host_is_trusted_only_for_the_exact_post_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tunnel_host = "abc123.ngrok-free.app"
+    settings = Settings(_env_file=None, github_webhook_allowed_hosts=(tunnel_host,))
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    client = TestClient(routes.app, base_url="http://localhost")
+
+    webhook = client.post("/api/v1/webhooks/github", headers={"host": tunnel_host}, content=b"{}")
+    assert webhook.status_code == 401  # The request reached signature verification.
+
+    assert client.get("/health/live", headers={"host": tunnel_host}).status_code == 400
+    assert client.post("/api/v1/demo/reset", headers={"host": tunnel_host}).status_code == 400
+    assert client.get("/api/v1/webhooks/github", headers={"host": tunnel_host}).status_code == 400
+    assert (
+        client.post(
+            "/api/v1/webhooks/github",
+            headers={"host": "unconfigured.example.test"},
+            content=b"{}",
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/v1/webhooks/github",
+            headers={"host": tunnel_host, "origin": f"https://{tunnel_host}"},
+            content=b"{}",
+        ).status_code
+        == 403
+    )
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "*.abc123.ngrok-free.app",
+        "evil.abc123.ngrok-free.app",
+        "abc123.ngrok-free.app.evil.test",
+        "abc123.ngrok-free.app..",
+        "abc123.ngrok-free.app:invalid",
+        "abc123.ngrok-free.app:",
+    ],
+)
+def test_github_webhook_tunnel_host_rejects_wildcard_suffix_and_malformed_hosts(
+    monkeypatch: pytest.MonkeyPatch, host: str
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        github_webhook_allowed_hosts=("abc123.ngrok-free.app",),
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    client = TestClient(routes.app, base_url="http://localhost")
+
+    assert (
+        client.post("/api/v1/webhooks/github", headers={"host": host}, content=b"{}").status_code
+        == 400
+    )
+
+
+def test_github_webhook_allowed_hosts_are_exact_hostnames_and_json_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_WEBHOOK_ALLOWED_HOSTS", '["abc123.ngrok-free.app"]')
+    assert Settings(_env_file=None).github_webhook_allowed_hosts == ("abc123.ngrok-free.app",)
+
+    for invalid in (
+        ("*.ngrok-free.app",),
+        ("https://abc123.ngrok-free.app",),
+        ("abc123.ngrok-free.app:443",),
+        ("abc123.ngrok-free.app/path",),
+    ):
+        with pytest.raises(ValidationError, match="exact hostnames"):
+            Settings(_env_file=None, github_webhook_allowed_hosts=invalid)
+
+
+def test_github_webhook_tunnel_allowlist_does_not_change_localhost_or_websocket_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        github_webhook_allowed_hosts=("abc123.ngrok-free.app",),
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    client = TestClient(routes.app, base_url="http://127.0.0.1:8000")
+
+    assert client.get("/health/live").status_code == 200
+    assert client.post("/api/v1/webhooks/github", content=b"{}").status_code == 401
+
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with client.websocket_connect("/ws", headers={"host": "abc123.ngrok-free.app"}):
+            pass
+    assert closed.value.code == 1008
+
+
 def test_personal_local_allows_exact_loopback_http_and_websocket_origins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -97,8 +191,7 @@ def test_personal_local_rejects_loopback_origins_on_unlisted_ports(
     client = TestClient(routes.app, base_url="http://127.0.0.1:8000")
 
     assert (
-        client.get("/health/live", headers={"origin": "http://127.0.0.1:5175"}).status_code
-        == 403
+        client.get("/health/live", headers={"origin": "http://127.0.0.1:5175"}).status_code == 403
     )
     with pytest.raises(WebSocketDisconnect) as closed:
         with client.websocket_connect("/ws", headers={"origin": "http://127.0.0.1:5175"}):
@@ -171,7 +264,8 @@ def test_public_demo_health_disables_all_real_providers(
 def test_public_demo_provider_routes_are_not_reachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = _demo_settings()
+    settings = _demo_settings(github_webhook_allowed_hosts=("abc123.ngrok-free.app",))
+    assert settings.github_webhook_allowed_hosts == ()
     monkeypatch.setattr(routes, "get_settings", lambda: settings)
     client = TestClient(routes.app, base_url="http://localhost:5174")
 
@@ -264,6 +358,7 @@ def test_purge_can_blank_ignored_provider_configuration_without_touching_core_se
             "DATABASE_URL=postgresql://local/db\n"
             "LIVEPULSE_MODE=PERSONAL_LOCAL\n"
             "API_FOOTBALL_KEY=football-secret\n"
+            'GITHUB_WEBHOOK_ALLOWED_HOSTS=["abc123.ngrok-free.app"]\n'
             "WEATHER_LATITUDE=41.9\n"
             "WEATHER_LONGITUDE=-87.6\n"
             "OTHER_SETTING=preserve-me\n",
@@ -273,6 +368,7 @@ def test_purge_can_blank_ignored_provider_configuration_without_touching_core_se
         assert clear_local_provider_config_file(env_file) is True
         cleaned = env_file.read_text(encoding="utf-8")
         assert "football-secret" not in cleaned
+        assert 'GITHUB_WEBHOOK_ALLOWED_HOSTS=["abc123.ngrok-free.app"]' not in cleaned
         assert "41.9" not in cleaned
         assert "-87.6" not in cleaned
         assert "DATABASE_URL=postgresql://local/db" in cleaned

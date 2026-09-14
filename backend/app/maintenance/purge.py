@@ -36,6 +36,7 @@ LOCAL_PROVIDER_CONFIG_KEYS = frozenset(
         "GITHUB_OWNER",
         "GITHUB_TOKEN",
         "GITHUB_WEBHOOK_SECRET",
+        "GITHUB_WEBHOOK_ALLOWED_HOSTS",
         "GOOGLE_CLIENT_ID",
         "GOOGLE_CLIENT_SECRET",
         "GOOGLE_REDIRECT_URI",
@@ -141,7 +142,7 @@ async def purge_personal_data(
 
 
 def clear_local_provider_config_file(path: Path | None = None) -> bool:
-    """Blank provider secrets/coordinates in the ignored root .env, without printing values."""
+    """Blank provider-specific values in the ignored root .env, without printing them."""
     env_path = path or Path(__file__).resolve().parents[3] / ".env"
     if not env_path.exists():
         return False

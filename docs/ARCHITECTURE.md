@@ -24,9 +24,10 @@ The simulator only supplies provider-shaped observations to the ordinary ingesti
 single-user, local-first service with no conventional account authentication. Its primary
 trust boundary is loopback isolation: the development server binds `127.0.0.1`, Docker
 publishes host ports only on `127.0.0.1`, and middleware accepts only loopback Host and
-browser Origin values. CORS is an exact localhost allowlist. The same middleware checks
-WebSocket Host/Origin before accepting a connection. Spotify and Gmail OAuth callbacks
-continue to work on their configured loopback callback hosts.
+browser Origin values except for HTTP `POST /api/v1/webhooks/github` on an exact hostname
+in `GITHUB_WEBHOOK_ALLOWED_HOSTS`. This exception does not apply to other paths, methods,
+WebSockets, or Origin validation. CORS remains an exact localhost allowlist. Spotify and
+Gmail OAuth callbacks continue to work on their configured loopback callback hosts.
 
 PUBLIC_DEMO requires `PUBLIC_DEMO_DATABASE_URL`, an exact host allowlist, and an exact
 HTTP(S) origin allowlist. The demo database name and login role must both differ from the
@@ -136,7 +137,7 @@ Schema and migration history are never deleted.
 
 ## Operations and security boundaries
 
-JSON logs carry service, request/correlation ID, event ID/type, consumer identity, and categorized errors where known. Health live means process responsiveness; health ready checks PostgreSQL and broker availability. OAuth callback query material is stripped/redacted and `httpx` URL logging is disabled. The complete trust model and operational commands are recorded in `docs/SECURITY_AND_PRIVACY.md`. PERSONAL_LOCAL must remain loopback-only; PUBLIC_DEMO is limited to sanitized data in its isolated database and explicit host/origin allowlists. No secrets are committed. No Redis or Kubernetes is used.
+JSON logs carry service, request/correlation ID, event ID/type, consumer identity, and categorized errors where known. Health live means process responsiveness; health ready checks PostgreSQL and broker availability. OAuth callback query material is stripped/redacted and `httpx` URL logging is disabled. The complete trust model and operational commands are recorded in `docs/SECURITY_AND_PRIVACY.md`. PERSONAL_LOCAL remains loopback-only except for the explicitly configured GitHub webhook POST host/path exception; PUBLIC_DEMO is limited to sanitized data in its isolated database and explicit host/origin allowlists. No secrets are committed. No Redis or Kubernetes is used.
 
 ## Planned instrumentation
 

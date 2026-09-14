@@ -5,8 +5,9 @@
 LivePulse personal mode is `PERSONAL_LOCAL`: a single-user, local-first application, not a
 multi-user SaaS service. It does **not** implement conventional user authentication or
 authorization. Its primary authentication boundary is the local machine and loopback network
-isolation. Keep PERSONAL_LOCAL bound and published to loopback; do not expose its APIs to a
-LAN, reverse proxy, public tunnel, or untrusted browser.
+isolation. Keep PERSONAL_LOCAL bound and published to loopback; do not expose its full API to a
+LAN, reverse proxy, public tunnel, or untrusted browser. A development tunnel may forward only
+the signed GitHub webhook endpoint when its exact hostname is explicitly configured.
 
 The typed `LIVEPULSE_MODE` setting defaults to `PERSONAL_LOCAL`. The only other supported
 mode is `PUBLIC_DEMO`, intended for a portfolio/demo deployment with synthetic data. The
@@ -20,9 +21,13 @@ personal configuration, and account identifiers are not returned.
 - The normal Compose host publications are PostgreSQL `127.0.0.1:5432`, Redpanda
   `127.0.0.1:19092` and `127.0.0.1:9644`, API `127.0.0.1:8000`, and web `127.0.0.1:5173`.
 - ASGI middleware rejects non-loopback Host values and unsupported browser Origin values
-  for both HTTP and WebSocket requests. CORS is limited to the two exact development
+  for both HTTP and WebSocket requests. The sole Host exception is an HTTP `POST` to exactly
+  `/api/v1/webhooks/github` when the parsed hostname exactly matches an entry in
+  `GITHUB_WEBHOOK_ALLOWED_HOSTS`. Configure this as a JSON array of hostnames only, such as
+  `["abc123.ngrok-free.app"]`; it grants no access to other routes, methods, or WebSockets.
+  Origin validation and CORS remain unchanged. CORS is limited to the two exact development
   origins `http://localhost:5173` and `http://127.0.0.1:5173`; it is never wildcarded.
-  Requests without an Origin (for example, the configured Spotify/Gmail top-level OAuth
+  Other requests without an Origin (for example, the configured Spotify/Gmail top-level OAuth
   callbacks) still require a trusted loopback Host.
 - This trust boundary protects against accidental LAN/public exposure. Processes and users
   already trusted on the same machine are inside the personal-mode boundary.

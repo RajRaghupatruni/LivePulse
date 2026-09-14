@@ -1,3 +1,4 @@
+import re
 from enum import StrEnum
 from functools import lru_cache
 from urllib.parse import urlsplit
@@ -13,6 +14,7 @@ MONITORED_GITHUB_REPOSITORIES = (
     "Portfolio",
 )
 LOCKED_GITHUB_REPOSITORIES = frozenset(name.casefold() for name in MONITORED_GITHUB_REPOSITORIES)
+_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 class RuntimeMode(StrEnum):
@@ -57,6 +59,7 @@ class Settings(BaseSettings):
     github_owner: str | None = None
     github_token: SecretStr | None = None
     github_webhook_secret: SecretStr | None = None
+    github_webhook_allowed_hosts: tuple[str, ...] = ()
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
     google_redirect_uri: str | None = None
@@ -66,7 +69,12 @@ class Settings(BaseSettings):
     credential_encryption_key: SecretStr | None = None
     retention_days: int = Field(default=365, ge=30, le=3650)
 
-    @field_validator("public_demo_allowed_hosts", "public_demo_allowed_origins", mode="before")
+    @field_validator(
+        "public_demo_allowed_hosts",
+        "public_demo_allowed_origins",
+        "github_webhook_allowed_hosts",
+        mode="before",
+    )
     @classmethod
     def parse_allowlist(cls, value: object) -> object:
         if isinstance(value, str):
@@ -76,12 +84,28 @@ class Settings(BaseSettings):
             try:
                 value = json.loads(value)
             except json.JSONDecodeError as exc:
-                raise ValueError("demo allowlists must be JSON arrays") from exc
+                raise ValueError("allowlists must be JSON arrays") from exc
         if value is None:
             return ()
         if not isinstance(value, (list, tuple)):
-            raise ValueError("demo allowlists must be arrays")
+            raise ValueError("allowlists must be arrays")
         return tuple(str(item).strip() for item in value)
+
+    @field_validator("github_webhook_allowed_hosts")
+    @classmethod
+    def validate_github_webhook_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        hosts: list[str] = []
+        for item in value:
+            host = item.casefold().rstrip(".")
+            labels = host.split(".")
+            if (
+                not host
+                or len(host) > 253
+                or any(not label.isascii() or not _HOST_LABEL.fullmatch(label) for label in labels)
+            ):
+                raise ValueError("GitHub webhook allowed hosts must be exact hostnames")
+            hosts.append(host)
+        return tuple(hosts)
 
     @field_validator("weather_latitude", "weather_longitude", mode="before")
     @classmethod
@@ -166,6 +190,7 @@ class Settings(BaseSettings):
                 "credential_encryption_key",
             ):
                 setattr(self, field_name, None)
+            self.github_webhook_allowed_hosts = ()
         return self
 
     @property
