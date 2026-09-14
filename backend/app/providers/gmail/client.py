@@ -2,6 +2,7 @@
 
 import base64
 import re
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -259,9 +260,14 @@ def _safe_header(value: str, limit: int) -> str:
 def _safe_snippet(value: object) -> str:
     if not isinstance(value, str):
         return ""
-    text = re.sub(r"<[^>]{0,200}>", " ", value)
+    text = unicodedata.normalize("NFC", value)
+    text = re.sub(r"<[^>]{0,200}>", " ", text)
+    # Remove clear encoding artifacts without attempting lossy byte re-decoding.
+    text = re.sub(r"ï»¿|ï¿½|ð¤", " ", text)
+    text = re.sub(r"(?<!\w)Í(?:\s+Í){2,}(?!\w)", " ", text)
+    text = re.sub(r"[\u00ad\u200b\u2060\u202a-\u202e\u2066-\u2069\ufeff]", "", text)
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
     text = " ".join(text.replace("\r", " ").replace("\n", " ").split())
-    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
     return text[:240]
 
 

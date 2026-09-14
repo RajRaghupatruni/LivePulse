@@ -33,11 +33,24 @@ class OAuthAccessLogRedactionFilter(logging.Filter):
     _callback = re.compile(r"(/api/v1/providers/gmail/oauth/callback)\?[^\s\"]+")
 
     def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        if "/api/v1/providers/gmail/oauth/callback?" in message:
-            record.msg = self._callback.sub(r"\1?[REDACTED]", message)
-            record.args = ()
+        if isinstance(record.args, tuple):
+            # Uvicorn's AccessFormatter unpacks all five access arguments. Redact the
+            # path in place while retaining that tuple's shape for the formatter.
+            record.args = tuple(
+                self._redact(value) if isinstance(value, str) else value for value in record.args
+            )
+        elif isinstance(record.args, dict):
+            record.args = {
+                key: self._redact(value) if isinstance(value, str) else value
+                for key, value in record.args.items()
+            }
+        elif isinstance(record.msg, str):
+            record.msg = self._redact(record.msg)
         return True
+
+    @classmethod
+    def _redact(cls, value: str) -> str:
+        return cls._callback.sub(r"\1?[REDACTED]", value)
 
 
 def install_oauth_access_log_filter() -> None:

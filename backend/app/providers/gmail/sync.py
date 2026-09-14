@@ -84,9 +84,20 @@ class GmailSyncSource:
                 try:
                     latest_id, deltas = await self._incremental_sync(api, checkpoint)
                 except GmailApiError as exc:
-                    if exc.operation != "history.list" or exc.status_code != 404:
+                    if exc.operation != "history.list" or exc.status_code not in {400, 404}:
                         raise
-                    # Expired history gets one fresh cursor and one bounded scan.
+                    log.warning(
+                        "Gmail rejected its stored history checkpoint; starting bounded recovery",
+                        extra={
+                            "provider": "gmail",
+                            "component": "gmail_sync",
+                            "error_code": "history_checkpoint_rejected",
+                            "reason_code": "history_checkpoint_rejected",
+                            "operation": exc.operation,
+                            "status_code": exc.status_code,
+                        },
+                    )
+                    # A rejected checkpoint gets one fresh cursor and one bounded scan.
                     latest_id, messages = await self._bounded_full_sync(api)
                     deltas = [
                         GmailMessageDelta(metadata=item, change="initial") for item in messages
@@ -358,8 +369,13 @@ async def ingest_gmail_batch(
     await _trim_message_states(session)
     if batch.resynced:
         log.info(
-            "gmail bounded history recovery completed",
-            extra={"provider": "gmail", "message_count": len(batch.messages)},
+            "Gmail history checkpoint recovery was ingested",
+            extra={
+                "provider": "gmail",
+                "component": "gmail_sync",
+                "reason_code": "history_checkpoint_resynced",
+                "message_count": len(batch.messages),
+            },
         )
 
 

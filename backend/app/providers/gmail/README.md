@@ -44,11 +44,14 @@ advancement share one database transaction, so a failed ingestion cannot move th
 unaccepted events. Event dedupe keys use stable message identity, while flag-change events use Gmail
 history identity.
 
-Gmail expires old history IDs. If `history.list` returns 404, LivePulse captures a new profile
-history ID and runs one bounded 50-message rescan. It advances the new checkpoint only with the
-normal event/outbox transaction. Stable message/thread dedupe keys suppress events already known
-from the earlier sync. Future polls resume from the new history ID; recovery does not loop over the
-expired cursor.
+Gmail can reject an unusable history cursor with 400 or 404 from `history.list`. LivePulse captures
+a new profile history ID and runs one bounded 50-message rescan for either response. Other Gmail
+operations and 401/403/429 responses keep their normal failure behavior. The new checkpoint is
+advanced only with the normal event/outbox transaction. Stable message/thread dedupe keys suppress
+events already known from the earlier sync. Future polls resume from the new history ID; recovery
+does not loop over the rejected cursor. Structured logs distinguish
+`history_checkpoint_rejected` from `history_checkpoint_resynced` without logging the cursor or
+message contents.
 
 Provider records retain dashboard metadata only: message/thread IDs, sender, subject, received
 time, a 240-character safe snippet, and unread/important flags. Credentials are encrypted with the

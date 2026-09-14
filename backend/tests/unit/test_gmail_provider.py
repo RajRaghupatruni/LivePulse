@@ -15,7 +15,7 @@ from starlette.requests import Request
 from app.core.config import Settings
 from app.domain.events import CanonicalEvent
 from app.providers.base import PollContext
-from app.providers.gmail.client import GmailApiClient
+from app.providers.gmail.client import GmailApiClient, GmailApiError, _safe_snippet
 from app.providers.gmail.models import (
     GmailMessageBody,
     GmailMessageDelta,
@@ -616,9 +616,11 @@ async def test_checkpoint_rolls_back_when_event_outbox_acceptance_fails(
 
 
 @pytest.mark.asyncio
-async def test_expired_history_404_runs_bounded_resync_and_deduplicates_known_mail(
-    db_factory, google_settings
+@pytest.mark.parametrize("history_status", [400, 404])
+async def test_rejected_history_checkpoint_runs_bounded_resync_and_deduplicates_known_mail(
+    db_factory, google_settings, history_status, caplog
 ) -> None:
+    caplog.set_level(logging.INFO)
     await _seed_connection(db_factory, google_settings)
     context = _context()
     original = _observation("10", [_metadata("known1", "thread-known")])
@@ -633,10 +635,13 @@ async def test_expired_history_404_runs_bounded_resync_and_deduplicates_known_ma
             assert checkpoint is not None
             checkpoint.checkpoint_value = "1"
 
+    requests: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         if request.url.path.endswith("/history"):
             assert request.url.params["startHistoryId"] == "1"
-            return httpx.Response(404, json={"error": "history expired"})
+            return httpx.Response(history_status, json={"error": "history expired"})
         if request.url.path.endswith("/profile"):
             return httpx.Response(200, json={"historyId": "2000"})
         if request.url.path.endswith("/messages"):
@@ -652,7 +657,31 @@ async def test_expired_history_404_runs_bounded_resync_and_deduplicates_known_ma
     observations = await source.observe(context=_context())
     assert observations[0].content.resynced is True
     assert observations[0].content.history_id == "2000"
+    assert [request.url.path for request in requests].count("/gmail/v1/users/me/history") == 1
+    assert [request.url.path for request in requests].count("/gmail/v1/users/me/profile") == 1
+    assert [request.url.path for request in requests].count("/gmail/v1/users/me/messages") == 1
+    assert any(
+        getattr(record, "error_code", None) == "history_checkpoint_rejected"
+        and getattr(record, "reason_code", None) == "history_checkpoint_rejected"
+        and record.status_code == history_status
+        for record in caplog.records
+    )
+    from app.core.logging import JsonFormatter
+
+    rejected_log = next(
+        record
+        for record in caplog.records
+        if getattr(record, "reason_code", None) == "history_checkpoint_rejected"
+    )
+    structured = json.loads(JsonFormatter().format(rejected_log))
+    assert structured["error_code"] == "history_checkpoint_rejected"
+    assert structured["reason_code"] == "history_checkpoint_rejected"
+    assert "history expired" not in caplog.text
     await ingest_gmail_observations("gmail", observations, _context(), session_factory=db_factory)
+    assert any(
+        getattr(record, "reason_code", None) == "history_checkpoint_resynced"
+        for record in caplog.records
+    )
     assert await _row_count(db_factory, CanonicalEventRow) == 2
     assert await _row_count(db_factory, OutboxMessageRow) == 2
     async with db_factory() as session:
@@ -662,6 +691,215 @@ async def test_expired_history_404_runs_bounded_resync_and_deduplicates_known_ma
             )
         )
         assert checkpoint is not None and checkpoint.checkpoint_value == "2000"
+
+    # A newly constructed source (the process-restart case) resumes from the committed baseline.
+    resumed_requests: list[httpx.Request] = []
+
+    def resumed_handler(request: httpx.Request) -> httpx.Response:
+        resumed_requests.append(request)
+        assert request.url.path.endswith("/history")
+        assert request.url.params["startHistoryId"] == "2000"
+        return httpx.Response(200, json={"historyId": "2001", "history": []})
+
+    restarted_source = GmailSyncSource(
+        settings=google_settings,
+        session_factory=db_factory,
+        transport=httpx.MockTransport(resumed_handler),
+    )
+    resumed = await restarted_source.observe(context=_context())
+    assert resumed[0].content.history_id == "2001"
+    assert resumed[0].content.resynced is False
+    assert len(resumed_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_scan_failure_does_not_advance_rejected_checkpoint(
+    db_factory, google_settings
+) -> None:
+    await _seed_connection(db_factory, google_settings)
+    async with db_factory() as session:
+        async with session.begin():
+            session.add(
+                ProviderCheckpointRow(
+                    provider="gmail",
+                    checkpoint_key=HISTORY_CHECKPOINT,
+                    checkpoint_value="1",
+                )
+            )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/history"):
+            return httpx.Response(400, json={"error": "stale history id"})
+        if request.url.path.endswith("/profile"):
+            return httpx.Response(200, json={"historyId": "2000"})
+        if request.url.path.endswith("/messages"):
+            return httpx.Response(400, json={"error": "bad list request"})
+        raise AssertionError(f"unexpected recovery request: {request.url.path}")
+
+    source = GmailSyncSource(
+        settings=google_settings,
+        session_factory=db_factory,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(GmailApiError) as caught:
+        await source.observe(context=_context())
+    assert caught.value.operation == "messages.list"
+    assert caught.value.status_code == 400
+    async with db_factory() as session:
+        checkpoint = await session.scalar(
+            select(ProviderCheckpointRow).where(
+                ProviderCheckpointRow.checkpoint_key == HISTORY_CHECKPOINT
+            )
+        )
+        assert checkpoint is not None and checkpoint.checkpoint_value == "1"
+
+
+@pytest.mark.asyncio
+async def test_failed_recovery_ingestion_keeps_rejected_checkpoint_until_atomic_commit(
+    db_factory, google_settings, monkeypatch
+) -> None:
+    import app.providers.gmail.sync as sync
+
+    await _seed_connection(db_factory, google_settings)
+    original = _observation("10", [_metadata("known1", "thread-known")])
+    await ingest_gmail_observations("gmail", [original], _context(), session_factory=db_factory)
+    async with db_factory() as session:
+        async with session.begin():
+            checkpoint = await session.scalar(
+                select(ProviderCheckpointRow).where(
+                    ProviderCheckpointRow.checkpoint_key == HISTORY_CHECKPOINT
+                )
+            )
+            assert checkpoint is not None
+            checkpoint.checkpoint_value = "1"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/history"):
+            return httpx.Response(400, json={"error": "stale history id"})
+        if request.url.path.endswith("/profile"):
+            return httpx.Response(200, json={"historyId": "2000"})
+        if request.url.path.endswith("/messages"):
+            return httpx.Response(200, json={"messages": [{"id": "known1"}]})
+        return httpx.Response(200, json=_gmail_metadata_response("known1"))
+
+    source = GmailSyncSource(
+        settings=google_settings,
+        session_factory=db_factory,
+        transport=httpx.MockTransport(handler),
+    )
+    observations = await source.observe(context=_context())
+    assert observations[0].content.resynced is True
+    assert observations[0].content.history_id == "2000"
+
+    async def reject(_session, _event):
+        raise RuntimeError("injected recovery ingestion failure")
+
+    monkeypatch.setattr(sync, "persist_event_and_outbox", reject)
+    with pytest.raises(RuntimeError, match="injected recovery ingestion failure"):
+        await ingest_gmail_observations(
+            "gmail", observations, _context(), session_factory=db_factory
+        )
+    async with db_factory() as session:
+        checkpoint = await session.scalar(
+            select(ProviderCheckpointRow).where(
+                ProviderCheckpointRow.checkpoint_key == HISTORY_CHECKPOINT
+            )
+        )
+        assert checkpoint is not None and checkpoint.checkpoint_value == "1"
+    assert await _row_count(db_factory, CanonicalEventRow) == 2
+    assert await _row_count(db_factory, OutboxMessageRow) == 2
+
+
+@pytest.mark.asyncio
+async def test_unrelated_gmail_400_is_not_converted_to_checkpoint_recovery(
+    db_factory, google_settings
+) -> None:
+    await _seed_connection(db_factory, google_settings)
+    async with db_factory() as session:
+        async with session.begin():
+            session.add(
+                ProviderCheckpointRow(
+                    provider="gmail",
+                    checkpoint_key=HISTORY_CHECKPOINT,
+                    checkpoint_value="100",
+                )
+            )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/history"):
+            return httpx.Response(
+                200,
+                json={
+                    "historyId": "101",
+                    "history": [{"id": "101", "messagesAdded": [{"message": {"id": "m1"}}]}],
+                },
+            )
+        if request.url.path.endswith("/messages/m1"):
+            return httpx.Response(400, json={"error": "bad metadata request"})
+        raise AssertionError(f"unexpected request: {request.url.path}")
+
+    source = GmailSyncSource(
+        settings=google_settings,
+        session_factory=db_factory,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(GmailApiError) as caught:
+        await source.observe(context=_context())
+    assert caught.value.status_code == 400
+    assert caught.value.operation == "messages.get"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 403, 429])
+async def test_history_auth_and_rate_limit_failures_are_not_resynced(
+    db_factory, google_settings, status_code
+) -> None:
+    await _seed_connection(db_factory, google_settings)
+    async with db_factory() as session:
+        async with session.begin():
+            session.add(
+                ProviderCheckpointRow(
+                    provider="gmail",
+                    checkpoint_key=HISTORY_CHECKPOINT,
+                    checkpoint_value="100",
+                )
+            )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "oauth2.googleapis.com":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "refreshed-access",
+                    "refresh_token": "new-refresh",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                    "scope": GMAIL_READONLY_SCOPE,
+                },
+            )
+        assert request.url.path.endswith("/history")
+        return httpx.Response(status_code, headers={"Retry-After": "60"})
+
+    source = GmailSyncSource(
+        settings=google_settings,
+        session_factory=db_factory,
+        transport=httpx.MockTransport(handler),
+    )
+    if status_code == 429:
+        with pytest.raises(RetryAfterError):
+            await source.observe(context=_context())
+    else:
+        with pytest.raises(GmailApiError) as caught:
+            await source.observe(context=_context())
+        assert caught.value.status_code == status_code
+        assert caught.value.operation == "history.list"
+    async with db_factory() as session:
+        checkpoint = await session.scalar(
+            select(ProviderCheckpointRow).where(
+                ProviderCheckpointRow.checkpoint_key == HISTORY_CHECKPOINT
+            )
+        )
+        assert checkpoint is not None and checkpoint.checkpoint_value == "100"
 
 
 @pytest.mark.asyncio
@@ -819,25 +1057,36 @@ def test_safe_representations_and_event_mapping_exclude_body_and_tokens() -> Non
 
 
 def test_uvicorn_access_log_redacts_oauth_callback_query_values() -> None:
+    from uvicorn.logging import AccessFormatter
+
     record = logging.LogRecord(
         "uvicorn.access",
         logging.INFO,
         "server.py",
         1,
-        '%s - "%s %s HTTP/1.1" %d',
+        '%s - "%s %s HTTP/%s" %d',
         (
             "127.0.0.1",
             "GET",
             "/api/v1/providers/gmail/oauth/callback?code=one-time-code&state=csrf-state",
+            "1.1",
             200,
         ),
         None,
     )
     assert OAuthAccessLogRedactionFilter().filter(record)
-    message = record.getMessage()
+    assert len(record.args) == 5
+    message = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s').format(record)
     assert "one-time-code" not in message
     assert "csrf-state" not in message
     assert "[REDACTED]" in message
+
+
+def test_gmail_snippet_sanitization_is_conservative_and_bounded() -> None:
+    assert _safe_snippet("  ï»¿  Í Í Í  ð¤ ï¿½\ufeff\u200bHello\x00\x01  world  ") == "Hello world"
+    international = "São Paulo — 東京 مرحبًا 👩‍💻"
+    assert _safe_snippet(international) == international
+    assert len(_safe_snippet("x" * 400)) == 240
 
 
 @pytest.mark.asyncio

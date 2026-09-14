@@ -24,6 +24,7 @@ from app.providers.football.models import FootballFixtureObservation, Normalized
 from app.providers.football.store import FootballCheckpointStore
 from app.providers.github.events import GithubChange
 from app.providers.github.storage import persist_observations as persist_github_observations
+from app.providers.gmail import sync as gmail_sync_module
 from app.providers.gmail.models import GmailMessageDelta, GmailMessageMetadata, GmailSyncBatch
 from app.providers.gmail.sync import (
     HISTORY_CHECKPOINT,
@@ -796,6 +797,9 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
     message_id = uuid7().hex
     thread_id = uuid7().hex
     history_id = str(uuid7().int % 10**30)
+    # Never make a live Gmail sync consume this synthetic cursor from the shared local DB.
+    gmail_test_checkpoint_key = f"{HISTORY_CHECKPOINT}:integration:{uuid4().hex}"
+    monkeypatch.setattr(gmail_sync_module, "HISTORY_CHECKPOINT", gmail_test_checkpoint_key)
     message_state_key = f"{MESSAGE_STATE_PREFIX}{message_id}"
     football_checkpoint_key = f"fixture:{fixture_id}"
     baseline_fixture_key = f"fixture:{baseline_fixture_id}"
@@ -812,10 +816,6 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                 select(ProviderCheckpointRow).where(
                     (ProviderCheckpointRow.provider == "football")
                     & (ProviderCheckpointRow.checkpoint_key == "pending-final")
-                    | (
-                        (ProviderCheckpointRow.provider == "gmail")
-                        & (ProviderCheckpointRow.checkpoint_key == HISTORY_CHECKPOINT)
-                    )
                     | (
                         (ProviderCheckpointRow.provider == "weather")
                         & ProviderCheckpointRow.checkpoint_key.in_(weather_checkpoint_keys)
@@ -1025,7 +1025,7 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
         gmail_checkpoint = await session.scalar(
             select(ProviderCheckpointRow).where(
                 ProviderCheckpointRow.provider == "gmail",
-                ProviderCheckpointRow.checkpoint_key == HISTORY_CHECKPOINT,
+                ProviderCheckpointRow.checkpoint_key == gmail_test_checkpoint_key,
             )
         )
         assert gmail_checkpoint is not None and gmail_checkpoint.checkpoint_value == history_id
@@ -1189,7 +1189,7 @@ async def test_provider_observations_reach_timeline_through_outbox_and_redpanda(
                     delete(ProviderCheckpointRow).where(
                         ProviderCheckpointRow.provider == "gmail",
                         ProviderCheckpointRow.checkpoint_key.in_(
-                            (HISTORY_CHECKPOINT, message_state_key)
+                            (gmail_test_checkpoint_key, message_state_key)
                         ),
                     )
                 )
