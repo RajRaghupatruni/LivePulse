@@ -23,5 +23,16 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const normalized = id.replaceAll('\\', '/')
+          if (normalized.includes('/node_modules/three/')) return 'three'
+          if (normalized.includes('/node_modules/@react-three/fiber/')) return 'react-three'
+        },
+      },
+    },
+  },
   test: { environment: 'jsdom', setupFiles: './src/test/setup.ts', css: true },
 })

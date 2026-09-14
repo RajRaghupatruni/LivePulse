@@ -293,6 +293,106 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 @media (max-width: 900px) { .provider-mini-strip { display: none; } }
 @media (max-width: 699px) { .visual-fixture-select { display: none; } }
 
+/* Cinematic motion layer: the existing DOM composition stays in front and fully readable. */
+:root { --motion-micro: 140ms; --motion-interaction: 240ms; --motion-state: 480ms; --motion-event: 1100ms; --ease-cinematic: cubic-bezier(.2, .8, .2, 1); }
+.environment-world-canvas { position: absolute !important; z-index: 1; inset: 0; opacity: .57; pointer-events: none !important; }
+.environment-world-canvas canvas { display: block; pointer-events: none !important; }
+.environment-quality-medium .environment-world-canvas { opacity: .43; }
+.environment-quality-low .environment-world-canvas { opacity: .29; }
+.environment-time-dawn, .environment-time-day, .environment-time-dusk, .environment-time-night { transition: background-color 4s ease; }
+.environment-world-canvas, .environment-skyline, .environment-atmosphere, .environment-horizon, .environment-vignette { transition-duration: 2.6s; }
+
+/* Physical glass responds only to a fine pointer; keyboard focus never moves a surface. */
+.livepulse-app[data-pointer-active="true"] .match-stage::before,
+.livepulse-app[data-pointer-active="true"] .gmail-panel::before,
+.livepulse-app[data-pointer-active="true"] .timeline-environment::before,
+.livepulse-app[data-pointer-active="true"] .spotify-capsule::before,
+.livepulse-app[data-pointer-active="true"] .quick-launch::before {
+  background: radial-gradient(230px circle at var(--surface-x, 50%) var(--surface-y, 50%), rgb(163 231 240 / 8%), transparent 74%), linear-gradient(135deg, rgb(187 239 248 / 5%), transparent 27%, transparent 76%, rgb(100 194 214 / 3%));
+}
+.gmail-panel, .timeline-environment, .spotify-capsule, .quick-launch { transition: transform var(--motion-interaction) ease-out, border-color var(--motion-state) ease, box-shadow var(--motion-state) ease; }
+.match-stage, .gmail-panel, .timeline-environment, .spotify-capsule, .quick-launch { transform-style: preserve-3d; }
+.livepulse-app[data-pointer-active="true"] .match-stage[data-pointer-lit="true"] { box-shadow: 0 19px 64px rgb(0 0 0 / 27%), 0 0 34px rgb(57 187 201 / 12%), inset 0 1px rgb(255 255 255 / 9%); }
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .gmail-panel:hover, .timeline-environment:hover, .spotify-capsule:hover, .quick-launch:hover { translate: 0 -1px 1px; }
+}
+html[data-keyboard-navigation="true"] .gmail-panel:hover,
+html[data-keyboard-navigation="true"] .timeline-environment:hover,
+html[data-keyboard-navigation="true"] .spotify-capsule:hover,
+html[data-keyboard-navigation="true"] .quick-launch:hover { translate: none; }
+
+/* System Pulse is the quiet heartbeat; connection states change its cadence and tone. */
+.pulse-instrument { isolation: isolate; }
+.pulse-instrument::before, .pulse-instrument::after { position: absolute; z-index: 0; top: 50%; left: 50%; content: ''; pointer-events: none; }
+.pulse-instrument::before { width: 13px; height: 13px; border-radius: 50%; background: radial-gradient(circle, rgb(113 214 229 / 70%) 0 12%, rgb(113 214 229 / 15%) 42%, transparent 72%); box-shadow: 0 0 12px rgb(113 214 229 / 22%); transform: translate(-50%, -50%); animation: pulse-core-breathe 5.4s ease-in-out infinite; }
+.pulse-instrument::after { width: 20px; height: 20px; border: 1px solid rgb(113 214 229 / 23%); border-right-color: transparent; border-radius: 50%; transform: translate(-50%, -50%); animation: pulse-orbit 18s linear infinite; }
+.pulse-instrument i { position: relative; z-index: 1; animation: pulse-bar-breathe 4.2s ease-in-out infinite; }
+.pulse-instrument i:nth-child(2) { animation-delay: -.8s; }
+.pulse-instrument i:nth-child(3) { animation-delay: -1.6s; }
+.pulse-instrument b { z-index: 2; animation: pulse-core-breathe 3.8s ease-in-out infinite; }
+.pulse-connection-reconnecting .pulse-instrument::before, .pulse-connection-connecting .pulse-instrument::before { background: radial-gradient(circle, rgb(227 189 114 / 70%) 0 12%, rgb(227 189 114 / 18%) 42%, transparent 72%); animation-duration: 1.7s; }
+.pulse-connection-reconnecting .pulse-instrument::after, .pulse-connection-resyncing .pulse-instrument::after { border-style: dashed; border-color: rgb(227 189 114 / 50%) transparent rgb(227 189 114 / 18%) rgb(227 189 114 / 50%); animation-duration: 4s; }
+.pulse-connection-resyncing .pulse-instrument::after { border-color: rgb(145 188 227 / 57%) transparent rgb(145 188 227 / 18%) rgb(145 188 227 / 57%); animation-duration: 2.8s; }
+.pulse-connection-degraded .pulse-instrument::before, .health-degraded .pulse-instrument::before, .health-unavailable .pulse-instrument::before { background: radial-gradient(circle, rgb(237 129 126 / 68%) 0 12%, rgb(237 129 126 / 16%) 42%, transparent 72%); animation: pulse-core-uneven 2.2s ease-in-out infinite; }
+.livepulse-app[data-motion-event="system-recovered"] .pulse-instrument::after { animation: pulse-recovery 650ms var(--ease-cinematic) both; }
+
+/* The timeline rail carries a restrained data current; only new live items get the arrival trace. */
+.timeline-list::after { position: absolute; z-index: 1; top: -32px; bottom: auto; left: 11px; width: 3px; height: 25px; border-radius: 4px; content: ''; pointer-events: none; background: linear-gradient(180deg, transparent, rgb(139 223 231 / 42%), transparent); filter: blur(1px); animation: timeline-current 7.5s linear infinite; }
+.timeline-entry-arriving::after { position: absolute; z-index: 2; top: -8px; left: 10px; width: 5px; height: 5px; border-radius: 50%; content: ''; pointer-events: none; background: var(--cyan-soft); box-shadow: 0 0 12px rgb(113 214 229 / 86%); animation: timeline-arrival 860ms var(--ease-cinematic) both; }
+.timeline-entry-arriving .timeline-domain-mark { animation: event-mark-arrive 740ms var(--ease-cinematic) both; }
+.livepulse-app[data-motion-event="gmail-message-received"] #gmail .gmail-message-item:first-child { animation: inbox-arrival 820ms var(--ease-cinematic) both; }
+.livepulse-app[data-motion-event="spotify-track-changed"] .spotify-artwork { animation: album-transition 740ms var(--ease-cinematic) both; }
+.livepulse-app[data-motion-event="spotify-playback-started"] .spotify-artwork { animation: album-wake 620ms var(--ease-cinematic) both; }
+.livepulse-app[data-focus-domain="football"] .match-stage { border-color: rgb(136 207 226 / 38%); }
+.livepulse-app[data-focus-domain="spotify"] .spotify-capsule { border-color: rgb(179 216 143 / 27%); }
+.livepulse-app[data-focus-domain="github"] .timeline-environment { border-color: rgb(167 190 215 / 24%); }
+.livepulse-app[data-focus-domain="gmail"] #gmail { border-color: rgb(227 170 166 / 25%); }
+.livepulse-app[data-focus-domain="football"] .gmail-panel,
+.livepulse-app[data-focus-domain="football"] .timeline-environment { opacity: .97; }
+.livepulse-app[data-match-mode="live"] .match-stage,
+.livepulse-app[data-match-mode="halftime"] .match-stage { transform: perspective(1500px) translateZ(3px); }
+.livepulse-app[data-motion-event="football-goal"] .match-stage { transform: perspective(1500px) translateZ(7px) scale(1.001); }
+
+/* Goal/card choreography stays local to the football surface and settles quickly. */
+.match-stage::after { position: absolute; z-index: 0; inset: 12px; border: 1px solid transparent; border-radius: 12px; content: ''; opacity: 0; pointer-events: none; }
+.livepulse-app[data-motion-event="football-goal"] .match-stage::after { border-color: rgb(133 230 236 / 34%); animation: football-shockwave 1180ms var(--ease-cinematic) both; }
+.livepulse-app[data-motion-event="football-card"] .match-stage { border-color: rgb(227 189 114 / 48%); box-shadow: 0 18px 60px rgb(0 0 0 / 24%), 0 0 27px rgb(227 189 114 / 9%), inset 0 1px rgb(255 255 255 / 8%); }
+.livepulse-app[data-motion-event="football-card"] .match-pulse-field { filter: drop-shadow(0 0 7px rgb(227 189 114 / 22%)); }
+.livepulse-app[data-motion-event="football-halftime"] .match-stage { transition-duration: 650ms; }
+.livepulse-app[data-motion-event="football-fulltime"] .match-stage { box-shadow: 0 18px 58px rgb(0 0 0 / 27%), 0 0 25px rgb(142 212 177 / 8%), inset 0 1px rgb(255 255 255 / 8%); }
+.livepulse-app[data-motion-event="system-degraded"] .system-pulse-trigger { animation: health-attention 850ms ease-out both; }
+.livepulse-app[data-motion-event="system-resyncing"] .system-pulse-trigger { border-color: rgb(145 188 227 / 38%); }
+.environment-weather-thunderstorm .environment-atmosphere-far { animation: distant-storm-light 16s ease-in-out infinite; }
+
+/* One short startup scan builds on the existing non-blocking wake sequence. */
+.livepulse-app.is-waking::after { position: fixed; z-index: 3; top: -4px; left: 0; width: 100%; height: 1px; content: ''; pointer-events: none; opacity: .52; background: linear-gradient(90deg, transparent, rgb(113 214 229 / 55%), transparent); box-shadow: 0 0 15px rgb(113 214 229 / 23%); animation: startup-scan 1550ms var(--ease-cinematic) both; }
+
+@keyframes pulse-core-breathe { 0%, 100% { opacity: .55; scale: .86; } 50% { opacity: .95; scale: 1.08; } }
+@keyframes pulse-core-uneven { 0%, 100% { opacity: .58; scale: .84; } 37% { opacity: .92; scale: 1.1; } 52% { opacity: .68; scale: .96; } }
+@keyframes pulse-orbit { to { rotate: 360deg; } }
+@keyframes pulse-bar-breathe { 0%, 100% { opacity: .6; } 50% { opacity: 1; } }
+@keyframes pulse-recovery { 0% { scale: .65; opacity: .3; rotate: -35deg; } 65% { scale: 1.2; opacity: 1; } 100% { scale: 1; opacity: .85; rotate: 0deg; } }
+@keyframes timeline-current { 0% { transform: translateY(0); opacity: 0; } 12% { opacity: .72; } 90% { opacity: .3; } 100% { transform: translateY(360px); opacity: 0; } }
+@keyframes timeline-arrival { 0% { transform: translateY(0) scale(.6); opacity: 0; } 18% { opacity: 1; } 100% { transform: translateY(72px) scale(1.05); opacity: 0; } }
+@keyframes event-mark-arrive { 0% { box-shadow: 0 0 0 rgb(113 214 229 / 0%); } 35% { box-shadow: 0 0 18px rgb(113 214 229 / 36%); } 100% { box-shadow: 0 0 0 rgb(113 214 229 / 0%); } }
+@keyframes inbox-arrival { 0% { background: rgb(113 214 229 / 0%); } 35% { background: rgb(113 214 229 / 11%); } 100% { background: transparent; } }
+@keyframes album-transition { 0% { opacity: .45; transform: perspective(400px) rotateY(-22deg) translateZ(-12px) scale(.94); } 55% { opacity: 1; transform: perspective(400px) rotateY(5deg) translateZ(5px) scale(1.02); } 100% { opacity: 1; transform: none; } }
+@keyframes album-wake { 0% { transform: scale(.94); box-shadow: 0 0 0 rgb(179 216 140 / 0%); } 58% { transform: scale(1.06); box-shadow: 0 0 22px rgb(179 216 140 / 22%); } 100% { transform: scale(1); box-shadow: 0 5px 18px rgb(0 0 0 / 27%); } }
+@keyframes football-shockwave { 0% { opacity: 0; transform: scale(.92); } 18% { opacity: .9; } 100% { opacity: 0; transform: scale(1.045); } }
+@keyframes health-attention { 0% { box-shadow: 0 0 0 rgb(227 189 114 / 0%); } 32% { box-shadow: 0 0 28px rgb(227 189 114 / 19%); } 100% { box-shadow: 0 9px 25px rgb(0 0 0 / 10%); } }
+@keyframes startup-scan { 0% { transform: translateY(0); opacity: 0; } 12% { opacity: .55; } 87% { opacity: .45; } 100% { transform: translateY(100vh); opacity: 0; } }
+@keyframes distant-storm-light { 0%, 74%, 79%, 100% { opacity: .14; } 75% { opacity: .2; } 76% { opacity: .12; } }
+
+@media (orientation: portrait) { .environment-world-canvas { opacity: .43; }.environment-quality-low .environment-world-canvas { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) {
+  .environment-world-canvas { opacity: .18; }
+  .pulse-instrument::before, .pulse-instrument::after, .pulse-instrument i, .pulse-instrument b, .timeline-list::after { animation: none !important; }
+  .livepulse-app.is-waking::after, .timeline-entry-arriving::after, .timeline-entry-arriving .timeline-domain-mark,
+  .livepulse-app[data-motion-event] .match-stage::after, .livepulse-app[data-motion-event] .gmail-message-item:first-child,
+  .livepulse-app[data-motion-event] .spotify-artwork, .livepulse-app[data-motion-event] .system-pulse-trigger { animation: none !important; }
+  .gmail-panel, .timeline-environment, .spotify-capsule, .quick-launch { translate: none !important; transform: none !important; }
+}
+
 /* Final proportions calibrated to the locked landscape and portrait references. */
 @media (min-width: 1601px) and (orientation: landscape) {
   .app-shell { grid-template-columns: 104px minmax(0, 1fr); }

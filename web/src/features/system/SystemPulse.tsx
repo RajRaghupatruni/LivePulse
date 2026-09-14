@@ -47,7 +47,7 @@ export function SystemPulse({ health, requestState, connection }: { health: Syst
   const sources = providers.flatMap(([key, label]) => health?.providers?.[key] ? [{ provider: health.providers[key], label }] : [])
   const providerSummary = sources.length ? sources.map(({ provider, label }) => `${label} ${stateNames[provider.status] ?? 'Unknown'}`).join(', ') : 'Provider status is resolving'
   return <div className="system-pulse-anchor">
-    <button className={`system-pulse-trigger health-${status}`} type="button" ref={triggerRef} aria-expanded={open} aria-controls="system-pulse-details" onClick={() => setOpen((value) => !value)}>
+    <button className={`system-pulse-trigger health-${status} pulse-connection-${connection.toLowerCase()}`} type="button" ref={triggerRef} aria-expanded={open} aria-controls="system-pulse-details" onClick={() => setOpen((value) => !value)}>
       <span className="pulse-instrument" aria-hidden="true"><i /><i /><i /><b /></span>
       <span className="pulse-trigger-copy"><span>SYSTEM PULSE</span><strong>{label}</strong></span>
       <span className="provider-mini-strip" aria-label={providerSummary}>{providers.map(([key, name]) => { const provider = health?.providers?.[key]; const tone = provider?.status ?? 'unknown'; return <i className={`provider-mini provider-${tone}`} key={key} title={`${name}: ${provider ? providerStatusLabel(provider.status, provider.configured) : 'Checking'}`} aria-hidden="true">{name.slice(0, 1)}</i> })}</span>
