@@ -1,172 +1,179 @@
 # LivePulse
 
-LivePulse is a single-user local desktop realtime command center built around a durable event platform. M1 proved the event path; M2 added backend-owned focus and recovery-aware UI; M3 integrates real football, GitHub, Spotify, Gmail, and weather sources into canonical events, the transactional outbox, Redpanda, idempotent projections, the durable Pulse Timeline, and replayable realtime delivery. The React UI runs in the browser for development and fallback, and inside a Windows-first Tauri v2 desktop shell. The shell does not replace or bundle PostgreSQL, Redpanda, or FastAPI; Docker Compose remains the local service substrate. Provider credentials are optional, and the application remains composed when an optional provider is unavailable.
+LivePulse is a local-first realtime personal command center that unifies football, Spotify, Gmail, GitHub, weather, and system health into one durable event-driven timeline.
 
-The locked P0 direction and implementation status live in [PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md). Review [ARCHITECTURE.md](docs/ARCHITECTURE.md), its accepted ADRs, and [DEFINITION_OF_DONE.md](docs/DEFINITION_OF_DONE.md) before changing core behavior. Provider setup and data handling are documented in [SECURITY_AND_PRIVACY.md](docs/SECURITY_AND_PRIVACY.md) and the provider-local READMEs.
+It is not a collection of API widgets.
 
-## Requirements
+Each upstream system has different delivery, consistency, authentication, rate-limit, and recovery semantics. LivePulse normalizes those systems behind one event model, durably persists important state transitions, distributes them through Redpanda, projects current state independently from history, and keeps a desktop client synchronized through REST snapshots and cursor-based WebSocket recovery.
 
-- Windows 10/11 with PowerShell 7 or Windows PowerShell 5.1
-- Python 3.13
-- Node.js 22 and npm
-- Docker Desktop with Compose
-- Rust stable with the MSVC toolchain and Microsoft C++ Build Tools for Tauri development/builds ([Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/))
-- Microsoft Edge WebView2 Runtime (included with current supported Windows releases)
+The application runs as a Windows desktop app using Tauri while preserving a React frontend, FastAPI backend, PostgreSQL state store, and Redpanda event backbone. The UI is the visible part; the engineering problem is keeping unlike sources coherent through failures and reconnects.
 
-Install Rust with `winget install --id Rustlang.Rustup --exact`, install the Visual Studio C++ Build Tools with the “Desktop development with C++” workload, then restart PowerShell so Cargo is on `PATH`.
+## Architecture
 
-## Windows quick start
+```mermaid
+flowchart LR
+  AF[API-Football] --> AD[Provider adapters]
+  SP[Spotify] --> AD
+  GM[Gmail] --> AD
+  GH[GitHub] --> AD
+  WX[Open-Meteo] --> AD
+  AD --> OBS[Typed observations and domain normalization]
+  OBS --> TX[PostgreSQL transaction]
+  TX --> CE[Immutable canonical event]
+  TX --> OB[Transactional outbox]
+  OB --> RP[Redpanda]
+  RP --> PJ[Idempotent projectors]
+  PJ --> MS[Current projections]
+  PJ --> TL[Durable Pulse Timeline]
+  MS --> REST[FastAPI REST snapshot]
+  TL --> REST
+  MS --> WS[Cursor-based WebSocket]
+  TL --> WS
+  REST --> UI[React command center]
+  WS --> UI
+  UI --> TA[Tauri v2 Windows shell]
+```
 
-From the repository root in PowerShell:
+The simulator used for development follows the same ingestion and normalization path as providers. No source writes the current projection or timeline directly.
+
+The core invariants are:
+
+- Provider DTOs stop at their adapters and do not leak into domain or frontend contracts.
+- Canonical events are immutable. Corrections become new events.
+- An important event and its outbox message commit in one PostgreSQL transaction before publication.
+- Delivery is at-least-once, not exactly-once. Consumers are idempotent.
+- Event history records what happened; projections describe what is true now.
+- REST snapshots are authoritative. WebSockets deliver increments and recoverable history, but clients never assume every frame arrived.
+- Optional provider failure does not prevent the application from starting.
+- Credentials stay in the backend and are encrypted at rest.
+
+### Why this is harder than polling five APIs
+
+The sources do not share one meaning of “current.” Football is polled and diffed, with corrections and lifecycle phases. Spotify playback is ephemeral and rate-limited. Gmail exposes a checkpointed history feed whose cursor can expire or be rejected. GitHub combines bounded REST reconciliation with optional signed webhooks. Weather is a cached observation tied to a user-selected location. If those differences leak into the UI, the command center becomes five competing refresh loops. LivePulse owns each source’s mechanics behind an adapter and gives the rest of the system stable events, projections, and health states.
+
+### Event model, outbox, and projections
+
+The canonical event envelope carries identity, source, type, subject, UTC occurrence/observation/ingestion times, version, deduplication key, schema version, correlation ID, and a typed domain payload stored as JSONB. PostgreSQL uniqueness constraints back application-level deduplication.
+
+The ingestion transaction writes the canonical event and corresponding outbox row together. A separate publisher claims pending rows safely, publishes to Redpanda with the subject ID as partition key, and marks a row published only after broker acknowledgement. A crash in between may publish the same event again; it cannot make a committed event disappear. The projector records `(consumer, event_id)` and applies projection/timeline changes in one transaction. Duplicate delivery therefore cannot double-apply a score or timeline row.
+
+The mutable current projection and append-only Pulse Timeline serve different questions. Football projectors update match state; other domains append normalized timeline activity without mutating football state. The timeline has a durable database cursor used for replay and recovery.
+
+### Realtime recovery
+
+REST reconstructs current match/provider state and timeline history after launch or refresh. WebSocket frames carry incremental state and timeline notifications with cursor identity. On reconnect, the backend can replay rows after the last cursor or ask the client to resynchronize; the frontend refetches authoritative REST state after gaps/reconnects and rejects stale versions. A lost notification can delay the next visible update, but it does not make the browser’s last frame authoritative.
+
+## Provider semantics
+
+| Source | Integration behavior |
+|---|---|
+| Football | API-Football; quota-aware adaptive polling, fixture diffing, normalized phases, score corrections, and meaningful canonical match events. Initial fixture discovery establishes a quiet baseline instead of flooding the timeline. |
+| Spotify | Server-side OAuth, encrypted tokens, current playback/device/context state, typed playback controls, and adaptive polling. Packaged OAuth opens the fixed backend start URL in the system browser and returns to a local completion page; the desktop observes persisted connection state. |
+| Gmail | Read-only `gmail.readonly` OAuth and checkpointed incremental metadata sync. A rejected history cursor gets one bounded full resync; the replacement checkpoint commits with accepted durable ingestion work. No send, reply, draft, label, delete, or other mailbox mutation exists. |
+| GitHub | Fixed five-repository allowlist (Strata, Tandem, OptiScale, LivePulse, Portfolio), bounded startup/catch-up REST reconciliation, and HMAC-verified webhook ingestion. Webhooks are supported but do not require a permanent public tunnel for the v1 local runtime. |
+| Weather | Open-Meteo geocoding and weather; selected place and five recents persist in PostgreSQL. Selecting a location refreshes promptly and drives the atmosphere from that place’s local time and observed conditions. The dashboard clock remains system-local. |
+
+Missing credentials disable only their provider. Health reports observed status and safe diagnostic codes without returning secrets, message content, or personal location details. Setup and provider-specific limits are in [`docs/SECURITY_AND_PRIVACY.md`](docs/SECURITY_AND_PRIVACY.md) and the provider package READMEs.
+
+## Windows desktop runtime
+
+LivePulse ships as a Windows-first Tauri v2 application. Tauri is intentionally a thin native shell:
+
+- React owns presentation and application interactions.
+- FastAPI owns provider integrations and business APIs.
+- PostgreSQL owns durable state and history.
+- Redpanda distributes canonical events.
+- Docker Compose is the local runtime substrate for PostgreSQL, Redpanda, and FastAPI.
+- Tauri owns the native window, readiness/retry surface, window state, fullscreen, safe external navigation, packaged OAuth handoff, and installers.
+
+Tauri does not start or stop Docker services. Start the Compose backend before opening the desktop app. Browser development remains supported. The Windows installers are NSIS and MSI; v1 is unsigned. The shell grants no arbitrary shell or filesystem access, and no provider secrets enter the React bundle or Tauri IPC.
+
+For desktop development, start the services and then run `npm run tauri:dev` from `web/`. Build an installer with `npm run tauri:build` from `web/`; outputs are under `web/src-tauri/target/release/bundle/`. Microsoft’s WebView2 runtime and the Windows Rust/MSVC build prerequisites are required to develop/build. The full setup is below.
+
+## Security and local data
+
+`PERSONAL_LOCAL` is a single-user local application protected by loopback isolation, exact Host/Origin checks, and encrypted provider credentials. It is not a remotely exposed multi-user service and does not claim conventional account authentication. Gmail is strictly read-only. Spotify/Gmail credentials remain server-side. PUBLIC_DEMO is a separate sanitized runtime with its own database/role and allowlists; it is not the personal data store. The product UI does not present demo fixtures or pretend they are provider data.
+
+Retention is an explicit maintenance command with a bounded 365-day default. A separate confirmation-gated purge exists for local data deletion. See [`docs/SECURITY_AND_PRIVACY.md`](docs/SECURITY_AND_PRIVACY.md) for ports, boundaries, configuration, OAuth scopes, retention, and purge procedures.
+
+## Semantic visual system
+
+LivePulse treats motion as another projection of system state rather than decoration. Canonical app transitions feed a deduplicated visual-event layer: a goal, mail arrival, CI change, provider recovery, Focus change, Match Mode, or selected weather can drive a restrained reaction. Historical Timeline rows do not replay as new arrivals, and repeated equivalent snapshots do not retrigger old effects.
+
+One lazy-loaded React Three Fiber atmosphere supplies environmental depth; readable controls and information remain normal DOM. CSS and motion primitives handle score, surface, and signal choreography. Adaptive quality, hidden-window suspension, and `prefers-reduced-motion` reduce unnecessary work. The atmosphere responds to Focus, connection, match events, local weather, and the selected weather location’s time. No formal long-duration GPU/FPS benchmark is claimed.
+
+## Failure cases found in real integration
+
+Real providers broke assumptions that fixtures had not.
+
+**Gmail rejected a persisted history cursor.** OAuth, profile, message listing, and metadata hydration were healthy, but the incremental history call rejected the saved cursor with HTTP 400. Gmail cursors are external durable state, not a guarantee of validity. The adapter now treats a 400 or 404 from `history.list` as one bounded recovery: it reads a fresh profile baseline, scans a bounded recent set, hydrates metadata, and advances the cursor only in the same durable ingestion transaction. Credentials remain intact; unrelated 400/401/403/429 failures retain their normal semantics.
+
+**Football’s provider knew a match was live while the hero said “upcoming.”** API-Football, canonical events, outbox, Redpanda, and the projector were working. The real live projection was omitted from the live-state selection when no demo match was active, and the frontend did not normalize API-Football’s “First Half” phase as live. The correction made provider-backed normalized phase authoritative, protected newer state from stale pre-match snapshots, and removed wall-clock guesses of live status. An already-open browser then updated through the normal projection and realtime path.
+
+**Reconnect is a state-reconstruction problem as well as a transport problem.** WebSockets can miss frames during a disconnect or process restart. Durable cursors let the server replay or request resync; REST remains the source for rebuilding current state and history. The browser never needs an uninterrupted socket history to recover.
+
+Other corrected failures are recorded in [`docs/DEFINITION_OF_DONE.md`](docs/DEFINITION_OF_DONE.md), including duplicate publication, test consumer isolation, Spotify startup-test contract, and packaged OAuth completion.
+
+## Validation evidence
+
+Final local release validation is recorded in [`docs/DEFINITION_OF_DONE.md`](docs/DEFINITION_OF_DONE.md) and is rerun for the v1 closeout below. It covers backend and PostgreSQL/Redpanda tests, Ruff, frontend tests/lint/typecheck/build, npm audit, Rust formatting/check/clippy, Compose health, and Windows NSIS/MSI packaging. Remote GitHub-hosted CI is not claimed as run unless explicitly stated. Live provider health and the real football path were verified during runtime work; automated tests mock provider APIs. Interactive provider consent is not represented as automated evidence.
+
+## Run locally
+
+Requirements: Windows 10/11, PowerShell, Python 3.13, Node 22, Docker Desktop with Compose. Tauri development/build additionally requires stable Rust, the MSVC toolchain/Visual Studio C++ Build Tools, and WebView2.
+
+From the repository root:
 
 ```powershell
 ./scripts/bootstrap.ps1
 ```
 
-This creates `.env` from `.env.example`, waits for healthy PostgreSQL 16 and Redpanda, creates `backend/.venv`, and installs backend/frontend dependencies.
-
-In one PowerShell window start the backend and its outbox publisher/projector workers:
+Set provider credentials in the ignored root `.env` as needed. The bootstrap script installs dependencies and starts PostgreSQL and Redpanda. Start the backend in one PowerShell window:
 
 ```powershell
 ./scripts/dev.ps1
 ```
 
-In another window start the frontend:
+Start the browser UI in another window:
 
 ```powershell
 Set-Location web
 npm run dev
 ```
 
-Open <http://localhost:5173>. The API is at <http://localhost:8000>; OpenAPI docs are at <http://localhost:8000/docs>. The backend runs `alembic upgrade head` before serving requests. The UI reports backend starting/unavailable, reconnects with bounded backoff, and keeps last-known state visible when possible. Neither browser mode nor the Tauri shell manages backend process ownership; Docker Compose remains responsible for PostgreSQL, Redpanda, and FastAPI. PostgreSQL and Redpanda can also be started directly with `docker compose up -d postgres redpanda`.
+Open <http://localhost:5173>. The all-container browser path is `docker compose up --build -d --wait`. To run the desktop app, ensure `postgres`, `redpanda`, and `backend` are healthy, then from `web/` run `npm run tauri:dev` or open a built installer application.
 
-The development script also waits for PostgreSQL and Redpanda health before running migrations. The all-container path is:
+## Build and validate
 
-```powershell
-docker compose up --build
-```
-
-It binds the browser/Compose web client on `127.0.0.1:5173`, the Tauri development Vite server on `127.0.0.1:5174`, API on `127.0.0.1:8000`, PostgreSQL on `127.0.0.1:5432`, and Redpanda Kafka on `127.0.0.1:19092`. `PERSONAL_LOCAL` has no conventional login: it is a single-user local app whose primary trust boundary is loopback isolation. Host and Origin checks cover HTTP and WebSockets, and CORS allows only the exact local Vite origins plus the packaged Tauri origin. Keep these ports off the LAN and internet.
-
-## Windows desktop app (Tauri v2)
-
-The Tauri shell bundles the existing Vite production build and uses the same React application as browser mode. PostgreSQL, Redpanda, and FastAPI remain local Docker Compose services; the desktop app does not start or stop Docker, so closing its window cannot terminate containers or interrupt durable work. Start the service stack from the repository root (the web container is not needed for the desktop app):
-
-```powershell
-docker compose up -d --wait postgres redpanda backend
-```
-
-The app checks `GET /health/ready` before revealing the dashboard. It shows a waiting state, offers retry after the backend is unavailable, and automatically restores the dashboard when readiness returns. Provider degradation remains visible in System Pulse after the API is ready. In the ignored root `.env`, set any provider configuration needed by the backend before starting the stack.
-
-For desktop development, keep the services running and start Tauri from the frontend package directory:
-
-```powershell
-Set-Location web
-npm run tauri:dev
-```
-
-This starts a loopback-only Vite server on `127.0.0.1:5174` as Tauri's development UI, separate from the browser/Compose port, and does not replace the normal browser workflow (`npm run dev`). For a Windows installer, run:
-
-```powershell
-npm run tauri:build
-```
-
-The release executable and MSI are written under `src-tauri/target/release/bundle/` (NSIS and MSI subdirectories). The default installer uses the Windows-managed WebView2 runtime; it does not bundle Docker or provider secrets. Building MSI packages may require Windows' optional VBScript feature. Browser development and the desktop window both connect only to the loopback backend. Tauri's packaged Windows origin is allowed as one exact PERSONAL_LOCAL origin; PUBLIC_DEMO and all other Host/Origin rules remain unchanged. In packaged mode, Spotify and Gmail authorization opens the backend start route in the system browser. The backend binds a fixed desktop completion mode to one-use OAuth state and serves a secret-free local completion page; the desktop UI polls the provider connection state for up to three minutes and refreshes automatically. Browser development keeps its existing frontend redirect flow. OAuth tokens and scopes remain server-side, and no custom URL scheme is used.
-
-## Demo
-
-The backend retains a deterministic demo-match API for development and integration verification; it is not presented in the final product UI. Ten deterministic observations arrive over about 54 seconds. Each is normalized by the same ingestion adapter used by providers. The event and outbox row commit atomically; the publisher sends to `livepulse.events.football.v1`; the projector updates match state and the ordered Pulse Timeline once; the WebSocket pushes notifications. The final score is Northstar FC 2–1 Harbor United. Reset cancels an active local scenario, deletes simulator-owned history/projections, and sends connected clients a resync signal. The global timeline cursor sequence is not reset. Each run receives a new match identity, so a delayed event updates only its own match projection and timeline history, never a newer match's projection.
-
-Useful endpoints:
-
-- `GET /health/live`
-- `GET /health/ready`
-- `GET /api/v1/live-state`
-- `GET /api/v1/timeline?limit=50`
-- `GET /api/v1/system/health`
-- `POST /api/v1/demo/scenarios/comeback/start`
-- `POST /api/v1/demo/reset`
-- `ws://localhost:8000/ws?last_cursor=0`
-
-The local command palette opens with **Ctrl+K** or **Cmd+K**. It routes Home, Timeline, Focus, Settings, Gmail, match selection, Focus presets, health diagnostics, and configured external destinations. It is deterministic local navigation, not AI. Browser fullscreen is available from the header. The header clock uses the local timezone; the health detail panel shows observed backend, transport, component, provider, and worker state.
-
-The final page uses a dominant football hero, a Gmail/Focus rail, Recent Signals, Spotify, and Quick Launch in landscape; portrait has its own vertical composition. See [`docs/UI_VISION.md`](docs/UI_VISION.md), [`docs/UI_STATE_MATRIX.md`](docs/UI_STATE_MATRIX.md), and the locked images in `docs/ui-reference/`. In development only, the small Visual Calibration selector can switch deterministic fixture states for screenshot comparison. It is dynamically imported only in Vite development and is absent from production output.
-
-## M3 provider integration
-
-The backend registers five real provider paths: API-Football observations; GitHub signed webhooks and bounded reconciliation; Spotify OAuth, playback polling, and typed playback commands; Gmail OAuth and read-only incremental sync; and Open-Meteo current conditions plus meaningful-change events. Poll sources share one bounded scheduler. Provider DTOs end at their adapters. Canonical events use the transactional PostgreSQL outbox and Redpanda, then the idempotent projector writes the Pulse Timeline. Football event families alone update football match state; GitHub, Spotify, Gmail, and weather use one generalized timeline-only projection path. All five optional provider configurations can remain blank without preventing startup.
-
-Set local values in the ignored `.env` copied from `.env.example`. Spotify and Gmail require a generated `CREDENTIAL_ENCRYPTION_KEY`; GitHub webhook and reconciliation capabilities are independently configured; football needs an API-Football key. Weather needs no key: click the compact weather control in the header, search for a city, and select it. The selected location and five recent places are stored in PostgreSQL; switching cities persists immediately and requests a fresh forecast without editing `.env` or restarting Docker. Existing latitude/longitude/timezone values remain optional first-run bootstrap fallback only. If there is no saved or configured location, the header offers **Choose location**. See each provider README for OAuth permissions, scopes, quota behavior, and local setup. M4 AI remains out of scope.
-
-## Runtime modes and privacy maintenance
-
-`LIVEPULSE_MODE` defaults to `PERSONAL_LOCAL`. To launch the sanitized `PUBLIC_DEMO`, use
-its separate Compose file and a fresh URL-safe database password:
-
-```powershell
-$env:PUBLIC_DEMO_DB_PASSWORD = (python -c "import secrets; print(secrets.token_hex(32))")
-docker compose -f docker-compose.public-demo.yml up --build -d --wait
-```
-
-Open <http://localhost:5174>. This stack has a dedicated PostgreSQL volume/role and Redpanda
-instance, passes no provider credentials or personal coordinates, ignores personal provider
-configuration even if secrets are present in another environment, blocks provider routes,
-and serves only the fictional deterministic match scenario. Its host ports bind to loopback.
-For a deliberate public portfolio deployment, set exact `PUBLIC_DEMO_ALLOWED_HOSTS` and
-`PUBLIC_DEMO_ALLOWED_ORIGINS` for the reverse-proxy hostname/HTTPS origin and keep the demo
-database private. The mode never falls back to the PERSONAL_LOCAL database.
-
-Retention is a deterministic operator command, not a background deletion loop. It defaults
-to 365 days, previews the next bounded batch, and preserves current football projections,
-pending delivery/projection work, provider connections, and incremental-sync checkpoints:
-
-```powershell
-Set-Location backend
-python -m app.maintenance.retention
-python -m app.maintenance.retention --apply
-```
-
-To disconnect one account, use `DELETE /api/v1/providers/spotify/connection` or
-`DELETE /api/v1/providers/gmail/connection`; this clears that local connection (and Gmail's
-sync checkpoints) while keeping its historical timeline events. For a full local purge,
-stop the backend scheduler but leave PostgreSQL and Redpanda running, inspect the dry-run,
-then confirm explicitly:
-
-```powershell
-python -m app.maintenance.purge
-python -m app.maintenance.purge --confirm "PURGE PERSONAL LIVEPULSE DATA" --include-provider-connections --clear-local-provider-config
-```
-
-That removes canonical/timeline/outbox/projection/checkpoint history, drops the mixed-domain
-Redpanda topic, deletes encrypted OAuth connection rows, and blanks provider keys and weather
-coordinates in the ignored root `.env`. It leaves migrations/schema intact. Clear any
-externally injected provider environment variables before restarting.
-
-## Tests and checks
+From `web/`, `npm run tauri:build` builds the Windows NSIS and MSI packages. Standard local checks:
 
 ```powershell
 ./scripts/test.ps1
 ```
 
-That runs Ruff and backend tests, then frontend lint/typecheck, Vitest, and production build. The PostgreSQL + Redpanda integration suite is opt-in locally:
+PostgreSQL/Redpanda tests are opt-in and use an isolated UUID-scoped Kafka topic. With infrastructure running, from `backend/`:
 
 ```powershell
-docker compose up -d --wait postgres redpanda
-# Stop the local projector first if the full Compose backend is running.
-docker compose stop backend
-Set-Location backend
-$env:DATABASE_URL = 'postgresql+asyncpg://livepulse:livepulse@localhost:5432/livepulse'
-$env:KAFKA_BOOTSTRAP_SERVERS = 'localhost:19092'
 $env:LIVEPULSE_INTEGRATION = '1'
-.\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m pytest
-docker compose up -d --wait backend
+python -m pytest
 ```
 
-CI runs that vertical test against PostgreSQL and Redpanda services, alongside lint, frontend tests, and build.
+The full checked commands and final counts are listed in the v1 closeout record in `docs/DEFINITION_OF_DONE.md`.
 
-## Delivery and recovery semantics
+## Deliberate v1 limits
 
-Publication and consumption are at-least-once, not exactly-once. A crash after broker acknowledgement and before marking an outbox row published can republish the same canonical event. The projector records `(consumer, event_id)` in the same transaction as state and timeline updates, so duplicates do not double-apply. WebSocket messages are notifications, not authority: reconnect replays rows after the supplied cursor, and the client reloads live state and timeline from REST. PostgreSQL holds the critical event history; Redis is intentionally absent.
+- Docker Compose must already be running for the packaged desktop app to become ready; Tauri does not own service startup or shutdown.
+- PostgreSQL and Redpanda are not embedded in the installer. NSIS/MSI packages are unsigned.
+- GitHub webhook ingestion is implemented, but v1 local setup does not require a permanent public tunnel; bounded reconciliation is available.
+- There is no always-on hosted personal deployment, multi-user authentication, AI chat, metrics/tracing stack, load-test result, or Terraform production architecture.
+- Packaged Spotify/Google OAuth has a safe browser handoff and completion flow, but a fully automated real-account consent test is not part of the local test suite.
+- The motion system adapts quality and pauses in reduced-motion/hidden states; no formal long-duration graphics benchmark has been recorded.
+- A lazy-loaded Three.js chunk is approximately 746 kB raw / 192 kB gzip in the known build. It is loaded only for the atmosphere; no bundle-size optimization milestone is claimed.
 
-PERSONAL_LOCAL is a local personal application without conventional account authentication; do not expose that mode publicly. PUBLIC_DEMO is a separate backend security/runtime mode and has no final UI presentation. The React platform boundary in `web/src/lib/platform.ts` keeps browser-only opening, fullscreen, authorization, preference, and API transport behavior out of feature components. The current interface targets a local desktop application while remaining usable as a single-window browser development/fallback surface. A later Tauri v2 milestone will add the Rust shell, borderless/fullscreen behavior, monitor placement and saved window state, native external launching, backend sidecar lifecycle, and packaging; no native code is included in this UI milestone. M2's deterministic Focus Engine and Match Mode remain server-owned; REST is authoritative and WebSocket delivery remains recoverable. AI, distributed scheduling, production key rotation/restore procedures, metrics/tracing, load tests, and Terraform remain out of scope.
+## Project records
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/adr/`](docs/adr/) — system boundaries and accepted decisions.
+- [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) — locked product requirements and milestone status.
+- [`docs/INTERVIEW_NOTES.md`](docs/INTERVIEW_NOTES.md) — concise discussion/reference notes.
+- [`docs/RESUME_BULLETS.md`](docs/RESUME_BULLETS.md) — verified resume-ready project bullets; the portfolio repository has only a PDF resume, with no editable source.
+- [`docs/UI_VISION.md`](docs/UI_VISION.md), [`docs/UI_STATE_MATRIX.md`](docs/UI_STATE_MATRIX.md), and [`docs/ui-reference/`](docs/ui-reference/) — visual contracts and references.

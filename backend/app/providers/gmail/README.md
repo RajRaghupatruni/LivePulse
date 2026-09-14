@@ -19,10 +19,13 @@ Google mailbox mutation API or remove existing timeline history.
    backend environment. The repository `.env.example` names these as `GOOGLE_CLIENT_ID`,
    `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, and `CREDENTIAL_ENCRYPTION_KEY`.
 6. Start the backend and open `http://localhost:8000/api/v1/providers/gmail/oauth/start` in a
-   browser. Google redirects to the callback after consent. The callback stores tokens server-side,
-   then redirects to `FRONTEND_BASE_URL` (local default `http://127.0.0.1:5173`) with a bounded
-   result indicator, so the authorization code does not remain in the browser URL. The Google
-   callback URI remains the separately configured backend URL above.
+   browser. Google redirects to the callback after consent. The callback stores tokens server-side.
+   Browser development redirects to `FRONTEND_BASE_URL` (local default
+   `http://127.0.0.1:5173`) with a bounded result indicator, so the authorization code does not
+   remain in the browser URL. Packaged Tauri binds an enumerated desktop completion mode to
+   one-use OAuth state, serves a static secret-free local completion page, and observes the
+   persisted connection with bounded polling. Gmail continues to request only `gmail.readonly`.
+   The Google callback URI remains the separately configured backend URL above.
 
 Google Cloud may require the OAuth app to be in Testing mode with the account added as a test user.
 The operator must also protect and back up the encryption key separately from the database; losing

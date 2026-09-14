@@ -231,3 +231,20 @@ Validation on 2026-09-13: `python -m pytest backend/tests -q` — **148 passed, 
 ### Integration isolation follow-up (2026-09-13)
 
 The full opt-in PostgreSQL/Redpanda suite now runs deterministically while the normal local API/projector remains running. `tests/integration/conftest.py` sets a process-local `KAFKA_TOPIC` such as `livepulse.events.integration.<uuid>` before importing application settings; this topic is deleted after the test session. Production `.env` and broker settings are untouched. The integration session completed with **12 passed** against the running local services, and the default backend suite completed with **146 passed, 12 skipped**. Ruff passed. A real runtime weather smoke searched Open-Meteo for Celina, selected the returned result, observed refreshed clear conditions, and confirmed the PostgreSQL-backed selection was still returned by a fresh location-state request. Docker Desktop was available for this follow-up.
+
+## LivePulse v1 release closeout (2026-09-14)
+
+The v1 closeout records the architecture and verified behavior of the Windows-first Tauri command center without adding an application demo mode or synthetic production data. `README.md` is the architecture-first project introduction; the locked requirements ledger and earlier milestone records remain preserved. `docs/INTERVIEW_NOTES.md` and `docs/RESUME_BULLETS.md` contain evidence-backed presentation material. The Portfolio repository now has a dedicated LivePulse case study and architecture visual. The Portfolio repository only contained a PDF resume, so no editable resume document was changed.
+
+Final local validation for this closeout:
+
+- Backend: `python -m pytest -q -p no:cacheprovider` — **175 passed, 15 skipped**. The skips are the opt-in integration tests; two existing Starlette/httpx deprecation warnings and an asyncio cleanup runtime warning were emitted. `python -m ruff check app tests alembic` passed.
+- PostgreSQL/Redpanda: with PostgreSQL and Redpanda healthy, `$env:LIVEPULSE_INTEGRATION = '1'; python -m pytest -q -p no:cacheprovider tests/integration` — **15 passed**. Integration events use the suite's isolated UUID-scoped topic.
+- Database: `python -m alembic check` — no new upgrade operations detected.
+- Frontend: `npm test -- --run` — **70 passed across 17 files**; `npm run lint`, `npm run build`, and `npm audit --audit-level=low` passed. Audit found **0 vulnerabilities**. The build reports the existing lazy-loaded Three.js chunk at about 746 kB raw / 192 kB gzip; the atmosphere is deferred to its own chunk.
+- Tauri Rust: `cargo fmt --check`, `cargo check`, and `cargo clippy -- -D warnings` passed. Installer generation was not repeated for this documentation/case-study closeout; the existing NSIS and MSI installers were produced by the prior desktop-shell validation.
+- Runtime: `docker compose config --quiet` passed. PostgreSQL and Redpanda reported healthy. The running PERSONAL_LOCAL API returned `live` and `ready`; `/api/v1/system/health` returned healthy with football, Spotify, Gmail, GitHub, and weather each configured and healthy. A live-state snapshot and timeline request returned successfully.
+- Portfolio: `npm test -- --run` — **35 passed across 7 files**; `npm run lint`, `npm run typecheck`, and `npm run build` passed. Playwright `npm run test:e2e` — **43 passed, 3 skipped**; the LivePulse case study passed desktop and mobile layouts without horizontal overflow.
+- `git diff --check` passed in both repositories. GitHub-hosted CI was not run remotely.
+
+Known v1 boundaries remain: Docker Compose must be running for the packaged desktop app; the Windows installers are unsigned; packaged OAuth account consent was not automated; the project does not claim multi-user hosting, load-test results, full metrics/tracing, Terraform, AI chat, or a long-duration graphics benchmark. These are explicit follow-on limits, not implemented v1 behavior.

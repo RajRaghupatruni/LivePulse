@@ -72,6 +72,12 @@ REST endpoints return current projection and timeline history. WebSocket notific
 
 The REST live-state/timeline response is the authoritative browser reconstruction. WebSocket frames are incremental notifications which may arrive after a REST snapshot, be duplicated, or be missed. The frontend merges only non-stale state versions, deduplicates timeline events by identity, and refetches REST state when the socket reports a gap or reconnects. It exposes `RECONNECTING` and `RESYNCING` while that recovery occurs; a visible last-known state is not treated as current until the snapshot is applied. Timeline cursor values are durable sequence watermarks, not event counts.
 
+## Semantic visual projection
+
+`web/src/features/motion/visualMotion.ts` maps canonical timeline entries and normalized application transitions into a small visual-event vocabulary. `useVisualMotion` deduplicates event identity and equivalent transitions, gives transient signals bounded lifetimes, and ignores historical timeline hydration as a new arrival. Components and the atmosphere consume these visual cues; they do not write application state or replace the REST/WS authority model. Football goals/cards, mail and developer signals, provider recovery, Focus, Match Mode, Spotify playback, and weather changes can affect emphasis where the UI has a corresponding surface.
+
+The environmental layer is one lazy-loaded React Three Fiber canvas behind readable DOM. It uses a bounded particle budget and adaptive quality profile, suspends its frame loop when the window is hidden, and honors reduced-motion settings. CSS and Motion primitives animate semantic DOM transitions such as score changes and timeline arrivals. There is no continuously animated dashboard-wide scene when reduced motion or hidden-window conditions pause it, and no formal long-duration FPS/GPU benchmark is claimed.
+
 The browser WebSocket 403 blocker was an Origin allowlist comparison bug: the middleware parsed the request Origin as `(scheme, host, port)` but compared the scheme string to the set of parsed tuples, rejecting allowed browser origins. It now compares the complete normalized tuple to the exact allowlist tuple. Tests cover an allowed development origin and rejected unlisted loopback ports/hosts for HTTP and WebSocket traffic; the allowlist was not loosened.
 
 ## Frontend platform boundary
